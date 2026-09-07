@@ -57,12 +57,47 @@ speed ceiling 6 rps but hardware-capped to ~0.83 rps):
   working well" baseline — Learn changes should be checked against not
   regressing this.
 
+## Second Learn run on v1.14 (raw learn_throws CSV, same powder)
+
+Reproducibility check against the first v1.14 fit — fit from the raw 12
+coarse + 12 fine throws:
+- Coarse flow: **10.734 gr/s/rps** (was 10.676, bench 10.1 — consistent)
+- Fine flow: **0.326 gr/s/rps** (was 0.318, bench 0.33 — consistent)
+- Measured lag: **coarse 0.534s / fine 0.704s** (was 0.53/0.74 — same
+  asymmetry, reproduced almost exactly)
+- Combined lag SD: 0.164s (was 0.19s)
+
+The coarse-vs-fine lag split (~0.53s vs ~0.70-0.74s) has now shown up
+identically in two independent Learn runs — it's real, not noise, and it
+directly contradicts the original v1.11 bench-CSV note above ("dead
+consistent across both tubes"). That earlier number was wrong, or measured
+differently; trust the Learn-derived per-phase split from here.
+
+**This asymmetry isn't just a display quirk — it affects real-time control.**
+`fit_profile()` computes `r->coarse_lag_s`/`r->fine_lag_s` separately
+(`src/learn_mode.cpp:504`) but only ever uses the *blended* `r->lag_used_s`
+for everything that matters: `coarse_tail_per_rps`, `fine_tail_per_rps`,
+the taper window, and — critically — the single `scale_lag_s` EEPROM value
+Learn writes (`src/learn_mode.cpp:637`). That one value is what
+`charge_mode.cpp:525` uses for live lag-compensated prediction, applied the
+same way in both the coarse and fine phases. So right now the coarse phase
+is predicted with lag ~0.1s too high, and the fine phase with lag ~0.1s too
+low, relative to what's actually measured for each. Given how tight actual
+performance already is (see below), this isn't causing failures, but it's
+a real, reproducible inefficiency with a known fix: split `scale_lag_s`
+into per-phase values, threaded through the charge loop and Learn's fit.
+That's an EEPROM-format change (revision bump, REST params, portal fields)
+so it hasn't been done — flagging for a decision, not doing it silently.
+
 ## Where we left off
 
 The `coarse_stop_threshold` mystery (5.8→5.3 by hand) is explained, not a
 live bug: see "Known open items" for the confirm-phase vs. live-tuning gap.
-No open ask right now — next real signal will be another Learn run or
-session CSV the user drops in.
+Confirmed `learn_enable` (live per-throw tuning) defaults to **false** —
+explains why the 21-throw production session showed no drift. Open
+question: whether to split lag compensation by phase (see above). No other
+open ask right now — next real signal will be another Learn run or session
+CSV the user drops in.
 
 ## Version screen quirk
 
