@@ -372,6 +372,15 @@ void scale_measurement_render_task(void *p) {
         // Draw line under title
         u8g2_DrawHLine(display_handler, 0, 13, screen_width);
 
+        // Auto-tune indicator: a small bullseye in the gap left of the weight digits,
+        // shown only when both lag compensation and Learn's per-throw tuning are active -
+        // together they're what's actually adjusting the profile while you charge.
+        if (charge_mode_config.eeprom_charge_mode_data.predict_enable &&
+            charge_mode_config.eeprom_charge_mode_data.learn_enable) {
+            u8g2_DrawCircle(display_handler, 12, 24, 6, U8G2_DRAW_ALL);
+            u8g2_DrawDisc(display_handler, 12, 24, 3, U8G2_DRAW_ALL);
+        }
+
         // Current weight (only show values > -1.0)
         memset(current_weight_string, 0x0, sizeof(current_weight_string));
         float scale_measurement = scale_get_current_measurement();
