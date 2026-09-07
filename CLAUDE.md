@@ -89,15 +89,36 @@ into per-phase values, threaded through the charge loop and Learn's fit.
 That's an EEPROM-format change (revision bump, REST params, portal fields)
 so it hasn't been done — flagging for a decision, not doing it silently.
 
+## Live-tuning convergence caught on camera (NewProfile5, 11-throw session)
+
+A fresh profile off the second Learn run (same 26gr target, same powder)
+showed `fine_s` drop monotonically throw-over-throw — 10.96, 9.30, 9.20,
+8.42, 7.52, 7.22, 5.56, 5.94, 4.84, 5.50, 4.60s — while `coarse_s` crept
+slightly up (2.10→2.52s). That's the exact signature of `learn_post_throw()`
+(`src/charge_mode.cpp:167`): every 5 consecutive clean passes it narrows
+`coarse_stop_threshold` by 5% and raises fine max speed by 5%, so coarse
+hands off marginally later (slightly more work, hence the uptick) while
+fine gets less to trickle and more speed to do it with. By throw 11 it's
+converged to 7.12s total / 4.60s fine — matching 8208XBR's steady state
+(~6.97s / ~4.5s) almost exactly, same hardware/powder as expected.
+
+This resolves the earlier open question: `learn_enable` **is** active on
+this hardware (the compiled default of `false` only applies to a fresh
+EEPROM/factory reset — doesn't tell us what's actually toggled on a live
+device). 8208XBR's 15/21-throw CSVs looked flat not because live tuning was
+off, but because it had already fully converged before that logging
+started. The original "5.8→5.3 by hand" from the very first report was the
+user manually doing in one edit what this loop does automatically in about
+10 throws — nothing was ever actually wrong with the fit or the tuner.
+
 ## Where we left off
 
-The `coarse_stop_threshold` mystery (5.8→5.3 by hand) is explained, not a
-live bug: see "Known open items" for the confirm-phase vs. live-tuning gap.
-Confirmed `learn_enable` (live per-throw tuning) defaults to **false** —
-explains why the 21-throw production session showed no drift. Open
-question: whether to split lag compensation by phase (see above). No other
-open ask right now — next real signal will be another Learn run or session
-CSV the user drops in.
+Two real, data-backed threads open, both flagged not implemented pending a
+decision (see above): splitting lag compensation by phase, and whether to
+extend Learn's own confirm phase past 5 throws so it can show the converged
+steady state instead of the cold-start number. Everything else is
+confirmed working as designed. Next signal: another Learn run, a new
+profile's early convergence, or a session CSV.
 
 ## Version screen quirk
 
