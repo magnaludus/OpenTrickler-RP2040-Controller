@@ -5,11 +5,13 @@ firmware for a powder-trickler/scale build on a **Raspberry Pi Pico 2 W**.
 
 ## Repo layout
 
-- `main` — tracks upstream `eamars/OpenTrickler-RP2040-Controller` unmodified.
-- `session-stats-bracket-learn` — our feature branch, based on upstream main at
-  commit `e23cc45` (PR #112). This is the active development branch.
+- `main` — this fork's active branch (merged from `session-stats-bracket-learn`),
+  based on upstream main at commit `e23cc45` (PR #112). GitHub's default branch,
+  shown on the repo's front page.
+- `session-stats-bracket-learn` — kept in sync with `main`; new work can land on
+  either, just keep them merged.
 
-## What's on the feature branch (session-v1.14 baseline)
+## What's on this fork (session-v1.14 baseline)
 
 Ported from an earlier chat-based dev loop (patch-and-flash against a full
 repo clone, no local git). Current firmware version tag: `session-v1.14`.
