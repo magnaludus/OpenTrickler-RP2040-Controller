@@ -634,9 +634,16 @@ bool learn_mode_apply_to_profile(void) {
     charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = r->coarse_stop_threshold;
     charge_mode_config.eeprom_charge_mode_data.predict_enable = r->predict_used;
     if (r->predict_used) {
-        charge_mode_config.eeprom_charge_mode_data.scale_lag_s = r->lag_used_s;
+        // Each phase gets its own measured lag rather than one blended value - coarse and fine
+        // have consistently measured different lag on tested hardware (~0.53s vs ~0.70-0.74s).
+        charge_mode_config.eeprom_charge_mode_data.coarse_lag_s = r->coarse_lag_s;
+        charge_mode_config.eeprom_charge_mode_data.fine_lag_s = r->fine_lag_s;
     }
     charge_mode_config.eeprom_charge_mode_data.auto_lag_enable = true;
+
+    // Floor for live per-throw tightening: it can narrow the handoff, but not past what the
+    // coarse tube's own measured spread needs.
+    charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr = r->coarse_tail_sd_at_max;
 
     learn_mode.applied_to_profile = true;
     return true;

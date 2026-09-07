@@ -568,8 +568,14 @@
                             </div>
 
                             <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Scale Lag (s)</span>
+                                <span class="label-text">Coarse Lag (s)</span>
                                 <input type="number" class="input input-bordered" name="c23" step="0.05" min="0" max="3">
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Fine Lag (s)</span>
+                                <input type="number" class="input input-bordered" name="c25" step="0.05" min="0" max="3">
+                                <span class="label-text-alt opacity-70">Coarse and fine are measured separately - on tested hardware they don't match (fine typically reads ~0.15-0.2s higher). Learn Powder sets both.</span>
                             </div>
 
                             <div class="grid grid-cols-1 gap-1">
@@ -578,7 +584,13 @@
                                     <option value="true">On</option>
                                     <option value="false">Off</option>
                                 </select>
-                                <span class="label-text-alt opacity-70">Re-measures the lag on every throw (what landed after the motors stopped, divided by how fast the reading was climbing) and tracks it slowly. Live values are on the trickler page.</span>
+                                <span class="label-text-alt opacity-70">Re-measures the lag on every throw (what landed after the motors stopped, divided by how fast the reading was climbing) and tracks it slowly. Only updates Fine Lag - that measurement is taken after the fine phase, so it's not a read on coarse's lag. Live values are on the trickler page.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Coarse Tail Spread (gr)</span>
+                                <input type="number" class="input input-bordered" name="c26" step="0.01" min="0">
+                                <span class="label-text-alt opacity-70">From the last Learn Powder fit. Floors how far Learn's per-throw tuning can narrow the coarse stop threshold, so a run of clean throws can't shave the margin down past what the coarse tube's own variance needs. Learn Powder sets this - leave at 0 to disable the floor.</span>
                             </div>
 
                             <div class="divider"></div>
@@ -1414,9 +1426,12 @@
             
             const lagTag = document.getElementById("lagTag");
             if (lagTag && data["s11"] !== undefined) {
-                const used = Number(data["s11"]).toFixed(2);
+                const coarseUsed = Number(data["s11"]).toFixed(2);
+                const fineUsed = Number(data["s14"]).toFixed(2);
                 const meas = Number(data["s12"]);
-                lagTag.innerText = meas > 0 ? `lag ${used}s (last ${meas.toFixed(2)})` : `lag ${used}s`;
+                lagTag.innerText = meas > 0
+                    ? `lag c${coarseUsed}s/f${fineUsed}s (last ${meas.toFixed(2)})`
+                    : `lag c${coarseUsed}s/f${fineUsed}s`;
             }
 
             const targetTag = document.getElementById("targetTag");
@@ -1656,7 +1671,7 @@
             document.getElementById("lrCtk").innerText = Number(d["ctk"]).toFixed(3) + " gr per rps";
             document.getElementById("lrFtk").innerText = Number(d["ftk"]).toFixed(4) + " gr per rps";
             document.getElementById("lrLag").innerText = Number(d["clag"]).toFixed(2) + " s / " + Number(d["flag"]).toFixed(2) + " s";
-            document.getElementById("lrLagUsed").innerText = (d["pred"] == true || d["pred"] == "true") ? ("on, " + Number(d["lagu"]).toFixed(2) + " s") : "off";
+            document.getElementById("lrLagUsed").innerText = (d["pred"] == true || d["pred"] == "true") ? ("on, c" + Number(d["clag"]).toFixed(2) + "s / f" + Number(d["flag"]).toFixed(2) + "s") : "off";
             document.getElementById("lrLagSd").innerText = Number(d["lagsd"]).toFixed(2) + " s";
             document.getElementById("lrDead").innerText = Number(d["dead"]).toFixed(2) + " s";
             const lagWarn = document.getElementById("lrLagWarn");

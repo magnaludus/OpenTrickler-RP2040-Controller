@@ -111,6 +111,52 @@ started. The original "5.8→5.3 by hand" from the very first report was the
 user manually doing in one edit what this loop does automatically in about
 10 throws — nothing was ever actually wrong with the fit or the tuner.
 
+## Overcharge bug found and fixed (deterministic, not just variance)
+
+NewProfile5 escalated from intermittent overshoot at 26gr (4 of 5 throws)
+to **100% overshoot at 40gr** (11/11 OVER, up to 0.897gr over target) the
+first time the target weight changed. That ruled out "unlucky variance" as
+the sole explanation and made this safety-critical (this device controls
+powder charge weight for live ammunition).
+
+Root causes fixed (EEPROM_CHARGE_MODE_DATA_REV bumped 11→12 — **flashing
+this resets all charge-mode settings to firmware defaults**: coarse stop
+threshold, brackets, LED colours, lag config, learn/predict/auto-lag
+toggles all revert; re-run Learn Powder or reconfigure after flashing):
+
+1. **Split `scale_lag_s` into `coarse_lag_s`/`fine_lag_s`.** One blended
+   value was applied uniformly to both phases by the live control loop
+   (`charge_mode.cpp`'s real-time `predicted_weight`) despite coarse and
+   fine consistently measuring different lag (~0.53s vs ~0.70-0.74s,
+   confirmed across two Learn runs). Fixed: the charge loop now picks
+   `coarse_lag_s` while the coarse phase is still moving, `fine_lag_s`
+   after. `auto_lag_enable`'s continuous re-learning only ever updates
+   `fine_lag_s` now (its measurement point, the throw's final settle, is
+   downstream of the fine phase - it was never actually reading coarse's
+   lag, just overwriting the shared value with fine's).
+2. **Live per-throw tightening had no variance floor.** `learn_post_throw()`
+   narrowed `coarse_stop_threshold` by 5% every 5 consecutive clean passes
+   with no reference to how much the coarse tube's own dispensing actually
+   varies - a streak of 5 isn't proof a margin is safe, just that it hasn't
+   failed yet. Fixed: persisted the Learn fit's `coarse_tail_sd_at_max`
+   into a new EEPROM field `coarse_tail_sd_gr`, and the tightening floor
+   is now `max(handoff*0.95, taper*1.5, 3*coarse_tail_sd_gr)` - can't
+   narrow the margin past 3 sigma of the coarse tube's measured spread,
+   regardless of streak length or target weight (this floor is in absolute
+   grams, so it protects a fresh/never-tuned target weight too, which is
+   exactly where the 40gr session failed).
+
+Verified: the historical raw-vs-predicted-weight blame bug from the
+original chat-based workflow (comparing the coarse stop against the raw
+lagging reading instead of the lag-compensated prediction) is **not**
+present in this codebase - traced end to end and confirmed correct.
+
+Web portal: "Scale Lag (s)" split into "Coarse Lag (s)" / "Fine Lag (s)"
+(REST c23/c25), new "Coarse Tail Spread (gr)" field (c26), live lag display
+on the trickler page now shows both phases (s11 coarse / s14 fine), Learn
+results panel's "Lag compensation" line shows both instead of the blended
+value.
+
 ## Where we left off
 
 Two real, data-backed threads open, both flagged not implemented pending a

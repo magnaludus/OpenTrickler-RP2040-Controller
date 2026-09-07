@@ -7,7 +7,7 @@
 #include "neopixel_led.h"
 
 
-#define EEPROM_CHARGE_MODE_DATA_REV                     11             // 16 byte 
+#define EEPROM_CHARGE_MODE_DATA_REV                     12             // 16 byte
 
 #define WEIGHT_STRING_LEN 8
 
@@ -63,11 +63,22 @@ typedef struct {
     uint8_t match_bracket_steps;                    // x 0.02 gr
     bool learn_enable;                              // adaptive profile tuning after each throw
 
-    // Lag compensation (rev 10). The scale reads behind the powder. Predicted weight = reading + rate x lag.
-    // The motors are driven off the predicted weight, the final stop is still on the real reading.
+    // Lag compensation (rev 10, split per phase in rev 12). The scale reads behind the powder.
+    // Predicted weight = reading + rate x lag. The motors are driven off the predicted weight,
+    // the final stop is still on the real reading.
     bool predict_enable;
-    float scale_lag_s;
-    bool auto_lag_enable;           // re-measure the lag from every throw and track it
+    float coarse_lag_s;
+    float fine_lag_s;
+    bool auto_lag_enable;           // re-measure the lag from every throw and track it. Only
+                                     // fine_lag_s gets updated this way - the measurement point
+                                     // (the throw's final settle) is downstream of the fine phase,
+                                     // so it reflects fine's lag, not coarse's. Coarse's lag only
+                                     // moves when Learn Powder is re-run.
+
+    // Coarse tail spread from the last Learn fit, in grains (rev 12). Floors how far live
+    // per-throw tuning can narrow coarse_stop_threshold - it can't cut the margin below what the
+    // coarse tube's own measured variance needs, no matter how many clean throws run in a row.
+    float coarse_tail_sd_gr;
 
 } eeprom_charge_mode_data_t;
 

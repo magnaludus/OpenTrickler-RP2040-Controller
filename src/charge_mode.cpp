@@ -66,8 +66,10 @@ const eeprom_charge_mode_data_t default_charge_mode_data = {
     .learn_enable = false,
 
     .predict_enable = false,
-    .scale_lag_s = 0.35f,
+    .coarse_lag_s = 0.35f,
+    .fine_lag_s = 0.35f,
     .auto_lag_enable = true,
+    .coarse_tail_sd_gr = 0.0f,
 };
 
 // Configures
@@ -228,8 +230,13 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
                 profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 1.06f, st->base_coarse_max, coarse_motor_cap);
             }
             else {
-                // Narrow the handoff first, it is cheaper than running the fine tube harder
-                float tighter = fmaxf(handoff * 0.95f, taper * 1.5f);
+                // Narrow the handoff first, it is cheaper than running the fine tube harder.
+                // Floored by the coarse tube's own measured spread from the Learn fit (3 sigma,
+                // same margin convention the initial fit uses) so a run of clean throws can't
+                // ratchet the margin down past what the coarse tube's natural variance needs -
+                // a streak of 5 is not proof the setting is safe, just that it hasn't failed yet.
+                float sd_floor = 3.0f * charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr;
+                float tighter = fmaxf(handoff * 0.95f, fmaxf(taper * 1.5f, sd_floor));
                 charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = learn_bound(tighter, st->base_handoff, 0.0f);
                 if (fine_s > 3.0f) {
                     float old_max = profile->fine_max_flow_speed_rps;
@@ -520,9 +527,12 @@ void charge_mode_wait_for_complete() {
     TickType_t coarse_stop_tick = charge_start_tick;
     last_coarse_stop_weight = 0.0f;
 
-    // Lag compensation: rate of climb from the readings, predicted weight = reading + rate x lag
+    // Lag compensation: rate of climb from the readings, predicted weight = reading + rate x lag.
+    // Coarse and fine measure differently (coarse ~0.53s, fine ~0.70-0.74s on tested hardware), so
+    // each phase uses its own value rather than one blended number.
     bool predict = charge_mode_config.eeprom_charge_mode_data.predict_enable;
-    float lag_s = fmaxf(0.0f, fminf(charge_mode_config.eeprom_charge_mode_data.scale_lag_s, 3.0f));
+    float coarse_lag_s = fmaxf(0.0f, fminf(charge_mode_config.eeprom_charge_mode_data.coarse_lag_s, 3.0f));
+    float fine_lag_s = fmaxf(0.0f, fminf(charge_mode_config.eeprom_charge_mode_data.fine_lag_s, 3.0f));
     float rate_gps = 0.0f;
     float last_weight = 0.0f;
     bool have_last_weight = false;
@@ -574,7 +584,9 @@ void charge_mode_wait_for_complete() {
         last_weight = current_weight;
         have_last_weight = true;
 
-        float predicted_weight = predict ? (current_weight + rate_gps * lag_s) : current_weight;
+        // Coarse is still moving until it hits its own stop condition below; use its lag until then.
+        float active_lag_s = should_coarse_trickler_move ? coarse_lag_s : fine_lag_s;
+        float predicted_weight = predict ? (current_weight + rate_gps * active_lag_s) : current_weight;
 
         // Motor decisions run on the predicted weight, the stop decision on the real reading
         float coarse_trickler_error = coarse_trickler_target_charge_weight - predicted_weight;
@@ -770,12 +782,16 @@ void charge_mode_wait_for_cup_removal() {
             if (measured < 5.0f) {
                 last_measured_lag = measured;
                 if (charge_mode_config.eeprom_charge_mode_data.auto_lag_enable) {
-                    // Slow tracking so one odd throw cannot move it far
-                    float current = charge_mode_config.eeprom_charge_mode_data.scale_lag_s;
+                    // This measurement is taken at the throw's final settle, downstream of the
+                    // fine phase - it's a read on fine's lag, not coarse's. Only track fine_lag_s
+                    // here; coarse_lag_s only moves when Learn Powder is re-run, so it can't get
+                    // pulled toward fine's (measurably different) lag characteristic.
+                    // Slow tracking so one odd throw cannot move it far.
+                    float current = charge_mode_config.eeprom_charge_mode_data.fine_lag_s;
                     float updated = 0.8f * current + 0.2f * measured;
                     if (updated < 0.0f) updated = 0.0f;
                     if (updated > 3.0f) updated = 3.0f;
-                    charge_mode_config.eeprom_charge_mode_data.scale_lag_s = updated;
+                    charge_mode_config.eeprom_charge_mode_data.fine_lag_s = updated;
                 }
             }
         }
@@ -1074,8 +1090,10 @@ bool http_rest_charge_mode_config(struct fs_file *file, int num_params, char *pa
     // c20 (int): match_bracket_steps (x 0.02 gr)
     // c21 (bool): learn_enable
     // c22 (bool): predict_enable
-    // c23 (float): scale_lag_s
+    // c23 (float): coarse_lag_s
     // c24 (bool): auto_lag_enable
+    // c25 (float): fine_lag_s
+    // c26 (float): coarse_tail_sd_gr
     // ee (bool): save to eeprom
 
     static char charge_mode_json_buffer[512];
@@ -1140,10 +1158,16 @@ bool http_rest_charge_mode_config(struct fs_file *file, int num_params, char *pa
             charge_mode_config.eeprom_charge_mode_data.predict_enable = string_to_boolean(values[idx]);
         }
         else if (strcmp(params[idx], "c23") == 0) {
-            charge_mode_config.eeprom_charge_mode_data.scale_lag_s = strtof(values[idx], NULL);
+            charge_mode_config.eeprom_charge_mode_data.coarse_lag_s = strtof(values[idx], NULL);
         }
         else if (strcmp(params[idx], "c24") == 0) {
             charge_mode_config.eeprom_charge_mode_data.auto_lag_enable = string_to_boolean(values[idx]);
+        }
+        else if (strcmp(params[idx], "c25") == 0) {
+            charge_mode_config.eeprom_charge_mode_data.fine_lag_s = strtof(values[idx], NULL);
+        }
+        else if (strcmp(params[idx], "c26") == 0) {
+            charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr = strtof(values[idx], NULL);
         }
 
 
@@ -1176,7 +1200,7 @@ bool http_rest_charge_mode_config(struct fs_file *file, int num_params, char *pa
              "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
              "{\"c1\":\"#%06lx\",\"c2\":\"#%06lx\",\"c3\":\"#%06lx\",\"c4\":\"#%06lx\","
              "\"c5\":%.3f,\"c6\":%.3f,\"c7\":%.3f,\"c8\":%.3f,\"c9\":%d,\"c10\":%s,\"c11\":%ld,\"c12\":%0.3f,\"c13\":%0.3f,\"c14\":%s,\"c15\":%0.3f,\"c16\":%0.3f,"
-             "\"c17\":\"#%06lx\",\"c18\":%d,\"c19\":%d,\"c20\":%d,\"c21\":%s,\"c22\":%s,\"c23\":%.2f,\"c24\":%s}",
+             "\"c17\":\"#%06lx\",\"c18\":%d,\"c19\":%d,\"c20\":%d,\"c21\":%s,\"c22\":%s,\"c23\":%.2f,\"c24\":%s,\"c25\":%.2f,\"c26\":%.3f}",
              charge_mode_config.eeprom_charge_mode_data.neopixel_normal_charge_colour._raw_colour,
              charge_mode_config.eeprom_charge_mode_data.neopixel_under_charge_colour._raw_colour,
              charge_mode_config.eeprom_charge_mode_data.neopixel_over_charge_colour._raw_colour,
@@ -1199,8 +1223,10 @@ bool http_rest_charge_mode_config(struct fs_file *file, int num_params, char *pa
              (int) charge_mode_config.eeprom_charge_mode_data.match_bracket_steps,
              boolean_to_string(charge_mode_config.eeprom_charge_mode_data.learn_enable),
              boolean_to_string(charge_mode_config.eeprom_charge_mode_data.predict_enable),
-             charge_mode_config.eeprom_charge_mode_data.scale_lag_s,
-             boolean_to_string(charge_mode_config.eeprom_charge_mode_data.auto_lag_enable));
+             charge_mode_config.eeprom_charge_mode_data.coarse_lag_s,
+             boolean_to_string(charge_mode_config.eeprom_charge_mode_data.auto_lag_enable),
+             charge_mode_config.eeprom_charge_mode_data.fine_lag_s,
+             charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr);
 
     size_t data_length = strlen(charge_mode_json_buffer);
     file->data = charge_mode_json_buffer;
@@ -1225,9 +1251,10 @@ bool http_rest_charge_mode_state(struct fs_file *file, int num_params, char *par
     // s8 (float): session average time s
     // s9 (float): session success rate percent
     // s10 (int): session throw count
-    // s11 (float): lag in use
-    // s12 (float): lag measured on the last throw
+    // s11 (float): coarse lag in use
+    // s12 (float): lag measured on the last throw (fine phase, feeds auto lag)
     // s13 (float): dead time on the last throw
+    // s14 (float): fine lag in use
 
     static char charge_mode_json_buffer[360];
     char elapsed_time_buffer[16] = {0};
@@ -1290,7 +1317,7 @@ bool http_rest_charge_mode_state(struct fs_file *file, int num_params, char *par
              "%s"
              "{\"s0\":%0.3f,\"s1\":%s,\"s2\":%d,\"s3\":%lu,\"s4\":\"%s\",\"s5\":\"%s\","
              "\"s6\":%0.2f,\"s7\":%d,\"s8\":%0.2f,\"s9\":%0.1f,\"s10\":%lu,"
-             "\"s11\":%0.2f,\"s12\":%0.2f,\"s13\":%0.2f}",
+             "\"s11\":%0.2f,\"s12\":%0.2f,\"s13\":%0.2f,\"s14\":%0.2f}",
              http_json_header,
              charge_mode_config.target_charge_weight,
              weight_string,
@@ -1303,9 +1330,10 @@ bool http_rest_charge_mode_state(struct fs_file *file, int num_params, char *par
              session_stats_avg_time(),
              session_stats_success_rate(),
              (unsigned long) session_stats_summary()->total,
-             charge_mode_config.eeprom_charge_mode_data.scale_lag_s,
+             charge_mode_config.eeprom_charge_mode_data.coarse_lag_s,
              last_measured_lag,
-             last_dead_time_s);
+             last_dead_time_s,
+             charge_mode_config.eeprom_charge_mode_data.fine_lag_s);
 
     // Clear events
     charge_mode_config.charge_mode_event = 0;
