@@ -46,10 +46,16 @@ speed ceiling 6 rps but hardware-capped to ~0.83 rps):
   found by hand-tuning down from an earlier run's ~5.8gr fit. The auto-tune
   fit is landing in the right place; see "Known open items" below for why
   its own confirm phase still looked slow.
-- Real 15-throw production session at 26gr target, same profile: **100%
-  pass, avg 7.02s/throw, error mean −0.037gr, error SD 0.017gr, always
-  under (never over) target.** This is the reference "it's working well"
-  baseline — Learn changes should be checked against not regressing this.
+- Real production session at 26gr target, same profile (8208XBR): **21/21
+  pass through the full session, avg 6.97s/throw, error mean −0.037gr,
+  error SD 0.017gr, always under (never over) target.** (First checked at
+  15 throws — 7.02s/−0.0373/0.017 — essentially unchanged by throw 21, no
+  detectable drift in coarse_s or fine_s across the session. That flatness
+  suggests either live per-throw tuning is off for this profile and it's
+  running a fixed already-good static fit, or it's already at a plateau —
+  worth confirming which if it matters later.) This is the reference "it's
+  working well" baseline — Learn changes should be checked against not
+  regressing this.
 
 ## Where we left off
 
