@@ -42,8 +42,12 @@ def main(output_path, build_type):
     logging.debug(f'Raw output: {output}')
     match = re.match(GIT_VERSION_PATTERN_REGEX, output)
 
-    version_string = "unknown"
-    hash_string = ""
+    # --always makes `git describe` fall back to a bare abbreviated commit hash when no
+    # vX.Y tag is reachable (e.g. a fork that didn't carry tags over). That fallback doesn't
+    # match GIT_VERSION_PATTERN_REGEX, but it is still a real, useful hash - keep it instead
+    # of blanking vcs_hash out along with version_string.
+    version_string = "no-tag"
+    hash_string = output.strip()
 
     if match:
         groupdict = match.groupdict()
