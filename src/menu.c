@@ -13,6 +13,7 @@
 #include "mini_12864_module.h"
 #include "eeprom.h"
 #include "charge_mode.h"
+#include "learn_mode.h"
 #include "cleanup_mode.h"
 #include "eeprom.h"
 #include "wireless.h"
@@ -38,6 +39,10 @@ static uint8_t menu_get_parent_form_id(uint8_t form_id) {
         case 12: return 10;
         case 13: return 10;
 
+        case 15: return 1;
+        case 16: return 1;
+        case 17: return 16;
+
         case 20: return 1;
 
         case 30: return 1;
@@ -50,6 +55,7 @@ static uint8_t menu_get_parent_form_id(uint8_t form_id) {
         case 36: return 30;
         case 37: return 30;
         case 39: return 30;
+        case 42: return 30;
 
         case 40: return 1;
         case 41: return 40;
@@ -132,6 +138,9 @@ void menu_task(void *p){
                     break;
                 case APP_STATE_ENTER_WIFI_INFO:
                     exit_form_id = wireless_view_wifi_info();
+                    break;
+                case APP_STATE_ENTER_LEARN_MODE:
+                    exit_form_id = learn_mode_menu();
                     break;
                 default:
                     break;

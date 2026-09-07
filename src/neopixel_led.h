@@ -16,6 +16,7 @@
 #define RGB_COLOUR_BLUE 0x0000FFul
 #define RGB_COLOUR_WHITE 0xFFFFFFul
 #define RGB_COLOUR_DULL_WHITE 0x0F0F0Ful
+#define RGB_COLOUR_SESSION_AMBER 0xFF8C1Aul   // warm amber backlight while a session is running
 
 
 typedef union {

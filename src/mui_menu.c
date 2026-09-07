@@ -14,6 +14,12 @@
 #include "common.h"
 #include "profile.h"
 #include "servo_gate.h"
+#include "session_stats.h"
+#include "session_version.h"
+
+#ifndef MUI_U8G2_V_PADDING
+#define MUI_U8G2_V_PADDING 1
+#endif
 
 
 // External modules/varaibles
@@ -65,7 +71,7 @@ uint8_t render_version_page(mui_t * ui, uint8_t msg) {
             snprintf(buf, sizeof(buf), "VCS: %s", vcs_hash);
             u8g2_DrawStr(u8g2, x, y + 10, buf);
 
-            snprintf(buf, sizeof(buf), "Build: %s", build_type);
+            snprintf(buf, sizeof(buf), "Build: %s", SESSION_BUILD_TAG);
             u8g2_DrawStr(u8g2, x, y + 20, buf);
 
             break;
@@ -227,6 +233,103 @@ uint8_t render_servo_gate_state_with_action(mui_t *ui, uint8_t msg) {
 
 
 
+// ---------------------------------------------------------------------------
+// Session page widgets
+// ---------------------------------------------------------------------------
+uint8_t render_session_stats(mui_t *ui, uint8_t msg) {
+    switch (msg) {
+        case MUIF_MSG_DRAW:
+        {
+            char buf[32];
+            u8g2_t *u8g2 = mui_get_U8g2(ui);
+            const session_summary_t * sm = session_stats_summary();
+
+            u8g2_SetFont(u8g2, u8g2_font_profont11_tf);
+
+            snprintf(buf, sizeof(buf), "Throws:%lu Pass:%.0f%%", (unsigned long) sm->total, session_stats_success_rate());
+            u8g2_DrawStr(u8g2, 5, 24, buf);
+
+            snprintf(buf, sizeof(buf), "Avg:%.1fs Rng:%.1f-%.1f", session_stats_avg_time(), sm->min_time, sm->max_time);
+            u8g2_DrawStr(u8g2, 5, 34, buf);
+
+            snprintf(buf, sizeof(buf), "Ov:%lu Un:%lu SD:%.3f", (unsigned long) sm->over, (unsigned long) sm->under, session_stats_err_sd());
+            u8g2_DrawStr(u8g2, 5, 44, buf);
+            break;
+        }
+    }
+    return 0;
+}
+
+
+// Button: reset the session counters, stay on the page
+uint8_t render_session_reset_button(mui_t *ui, uint8_t msg) {
+    switch (msg) {
+        case MUIF_MSG_CURSOR_SELECT:
+            session_stats_reset();
+            return 0;
+        default:
+            return mui_u8g2_btn_goto_wm_fi(ui, msg);
+    }
+}
+
+
+// Button: toggle Normal / Match. Label shows the active mode and bracket.
+uint8_t render_bracket_mode_button(mui_t *ui, uint8_t msg) {
+    switch (msg) {
+        case MUIF_MSG_DRAW:
+        {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "%s %.2f", charge_mode_bracket_mode_name(), charge_mode_get_active_bracket());
+            mui_u8g2_draw_button_utf(ui, mui_u8g2_get_fi_flags(ui), 0, 1, MUI_U8G2_V_PADDING, buf);
+            return 0;
+        }
+        case MUIF_MSG_CURSOR_SELECT:
+            charge_mode_toggle_bracket_mode();
+            return 0;
+        default:
+            return mui_u8g2_btn_goto_wm_fi(ui, msg);
+    }
+}
+
+
+// Bracket steps: the stock u8 min/max widget with the value drawn in grains
+uint8_t render_bracket_steps(mui_t *ui, uint8_t msg) {
+    switch (msg) {
+        case MUIF_MSG_DRAW:
+        {
+            mui_u8g2_u8_min_max_t *vmm = (mui_u8g2_u8_min_max_t *) muif_get_data(ui->uif);
+            uint8_t *value = mui_u8g2_u8mm_get_valptr(vmm);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "+/-%.2f", (*value) * BRACKET_STEP_GRAINS);
+            mui_u8g2_draw_button_utf(ui, mui_u8g2_get_pi_flags(ui), 0, 1, MUI_U8G2_V_PADDING, buf);
+            return 0;
+        }
+        default:
+            return mui_u8g2_u8_min_max_wm_mud_pi(ui, msg);
+    }
+}
+
+
+// Learn on/off toggle button
+uint8_t render_learn_toggle_button(mui_t *ui, uint8_t msg) {
+    switch (msg) {
+        case MUIF_MSG_DRAW:
+        {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "Learn: %s", charge_mode_config.eeprom_charge_mode_data.learn_enable ? "On" : "Off");
+            mui_u8g2_draw_button_utf(ui, mui_u8g2_get_fi_flags(ui), 0, 1, MUI_U8G2_V_PADDING, buf);
+            return 0;
+        }
+        case MUIF_MSG_CURSOR_SELECT:
+            charge_mode_config.eeprom_charge_mode_data.learn_enable = !charge_mode_config.eeprom_charge_mode_data.learn_enable;
+            return 0;
+        default:
+            return mui_u8g2_btn_goto_wm_fi(ui, msg);
+    }
+}
+
+
+
 muif_t muif_list[] = {
         /* normal text style */
         MUIF_U8G2_FONT_STYLE(0, u8g2_font_helvR08_tr),
@@ -282,7 +385,15 @@ muif_t muif_list[] = {
         // Render profile details
         MUIF_RO("P2", render_profile_ver_info),
         MUIF_RO("P3", render_profile_pid_details),
-        MUIF_RO("P4", render_profile_misc_details)
+        MUIF_RO("P4", render_profile_misc_details),
+
+        // Session / bracket
+        MUIF_RO("SS", render_session_stats),
+        MUIF_BUTTON("SR", render_session_reset_button),
+        MUIF_BUTTON("SM", render_bracket_mode_button),
+        MUIF_BUTTON("LE", render_learn_toggle_button),
+        MUIF_U8G2_U8_MIN_MAX("NB", &charge_mode_config.eeprom_charge_mode_data.normal_bracket_steps, BRACKET_STEPS_MIN, BRACKET_STEPS_MAX, render_bracket_steps),
+        MUIF_U8G2_U8_MIN_MAX("MB", &charge_mode_config.eeprom_charge_mode_data.match_bracket_steps, BRACKET_STEPS_MIN, BRACKET_STEPS_MAX, render_bracket_steps),
     };
 
 const size_t muif_cnt = sizeof(muif_list) / sizeof(muif_t);
@@ -297,6 +408,8 @@ fds_t fds_data[] = {
     MUI_STYLE(0)
     MUI_DATA("MU", 
         MUI_10 "Start|"
+        MUI_15 "Session|"
+        MUI_16 "Learn Powder|"
         MUI_20 "Cleanup|"
         MUI_40 "Wireless|"
         MUI_30 "Settings"
@@ -305,6 +418,42 @@ fds_t fds_data[] = {
     MUI_XYA("GC", 5, 37, 1) 
     MUI_XYA("GC", 5, 49, 2) 
     MUI_XYA("GC", 5, 61, 3)
+
+    // Menu 16: Learn powder, pick the profile to write into
+    MUI_FORM(16)
+    MUI_STYLE(1)
+    MUI_LABEL(5,10, "Learn: Profile")
+    MUI_XY("HL", 0,13)
+
+    MUI_STYLE(0)
+    MUI_XYAT("BN",115, 59, 17, "Next")
+    MUI_XYAT("BN",14, 59, 1, "Back")
+    MUI_XYA("P0", 5, 25, 33)
+
+    // Menu 17: Learn powder, go
+    MUI_FORM(17)
+    MUI_STYLE(1)
+    MUI_LABEL(5,10, "Learn Powder")
+    MUI_XY("HL", 0,13)
+
+    MUI_STYLE(0)
+    MUI_LABEL(5, 25, "Pan on, both tubes full.")
+    MUI_LABEL(5, 37, "24 throws, no cup pulls.")
+    MUI_LABEL(5, 49, "Confirms at last target.")
+    MUI_XYAT("BN",14, 59, 16, "Back")
+    MUI_XYAT("LV", 115, 59, 11, "Go")  // APP_STATE_ENTER_LEARN_MODE
+
+    // Menu 15: Session stats
+    MUI_FORM(15)
+    MUI_STYLE(1)
+    MUI_LABEL(5,10, "Session")
+    MUI_XY("HL", 0,13)
+
+    MUI_STYLE(0)
+    MUI_XY("SS", 5, 25)
+    MUI_XYAT("SM", 3, 59, 15, "Mode")      // toggles Normal / Match, stays on form 15
+    MUI_XYAT("SR", 64, 59, 15, "Reset")
+    MUI_XYAT("BN", 100, 59, 1, "Back")
 
     // Menu 10: Select profile
     MUI_FORM(10)
@@ -399,6 +548,7 @@ fds_t fds_data[] = {
     MUI_DATA("MU", 
         MUI_31 "Scale|"
         MUI_32 "Profile Manager|"
+        MUI_42 "Bracket|"
         MUI_37 "EEPROM|"
         MUI_39 "Servo Gate|"
         MUI_35 "Reboot|"
@@ -545,6 +695,21 @@ fds_t fds_data[] = {
     MUI_XYA("GC", 5, 37, 1) 
     MUI_XYA("GC", 5, 49, 2) 
     MUI_XYA("GC", 5, 61, 3)
+
+    // Menu 42: Bracket settings
+    MUI_FORM(42)
+    MUI_STYLE(1)
+    MUI_LABEL(5,10, "Bracket")
+    MUI_XY("HL", 0,13)
+
+    MUI_STYLE(0)
+    MUI_LABEL(5, 25, "Normal:")
+    MUI_XY("NB", 50, 25)
+    MUI_LABEL(5, 37, "Match:")
+    MUI_XY("MB", 50, 37)
+    MUI_XYAT("LE", 5, 49, 42, "Learn")
+    MUI_XYAT("BN", 14, 59, 30, "Back")
+    MUI_XYAT("BN", 115, 59, 60, "Save")   // form 60 = save to EEPROM
 
     // Wifi info
     MUI_FORM(41)

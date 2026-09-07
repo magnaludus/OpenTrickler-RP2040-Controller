@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html data-theme="opentrickler">
 
 <head>
     <meta charset="UTF-8">
@@ -16,6 +16,42 @@
         .exclude-bottom-nav {
             padding-bottom: 64px;
         }
+
+        /* "Bench" theme: gunmetal base, brass primary, copper secondary. Green pass, red over, amber under. */
+        [data-theme="opentrickler"] {
+            color-scheme: dark;
+            --b1: 17% 0.012 250;
+            --b2: 21% 0.014 250;
+            --b3: 26% 0.016 250;
+            --bc: 91% 0.012 80;
+            --p: 77% 0.15 72;
+            --pc: 18% 0.03 72;
+            --s: 62% 0.12 45;
+            --sc: 98% 0.01 80;
+            --a: 72% 0.16 150;
+            --ac: 15% 0.03 150;
+            --n: 30% 0.015 250;
+            --nc: 91% 0.012 80;
+            --in: 72% 0.12 230;
+            --inc: 15% 0.03 230;
+            --su: 70% 0.17 150;
+            --suc: 15% 0.03 150;
+            --wa: 82% 0.16 85;
+            --wac: 20% 0.03 85;
+            --er: 60% 0.22 27;
+            --erc: 98% 0.01 27;
+            --rounded-box: 0.75rem;
+            --rounded-btn: 0.5rem;
+        }
+        body { background-color: oklch(var(--b1)); color: oklch(var(--bc)); }
+        .stat-value { font-variant-numeric: tabular-nums; }
+        #currentWeightDecimal { color: oklch(var(--p)); }
+        .session-pass { color: oklch(var(--su)); }
+        .session-warn { color: oklch(var(--wa)); }
+        .session-fail { color: oklch(var(--er)); }
+        .bracket-tag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .btm-nav { background-color: oklch(var(--b2)); border-top: 1px solid oklch(var(--b3)); }
+        .btm-nav > .active { border-top-color: oklch(var(--p)); color: oklch(var(--p)); }
     </style>
 </head>
 
@@ -24,119 +60,195 @@
 <div class="container mx-auto">
     <!-- The Trickle Control Page -->
     <section id="sectionTrickler">
-        <div class="grid grid-cols-1 exclude-bottom-nav">
-            <!-- Row 1 -->
-            <div class="grid grid-cols-2">
+        <div class="grid grid-cols-1 gap-3 px-3 pt-3 exclude-bottom-nav">
 
-                <!-- Stat 1: Current Weight  -->
-                <div class="stat">
-                    <div class="stat-title">Current Weight</div>
-                    <div id="currentWeightDecimal" class="stat-value">---</div>
-                    <div id="profileName" class="stat-desc text-primary" onclick="onProfileNameClicked()">Unknown Profile</div>
-                    <div class="stat-desc">
-                        <progress id="currentWeightProgressPencentage" class="progress progress-primary" value="100" max="100"></progress>
+            <!-- Weight card -->
+            <div class="card bg-base-200 shadow-md">
+                <div class="card-body p-4 gap-2">
+                    <div class="flex justify-between items-end">
+                        <div>
+                            <div class="text-xs uppercase tracking-wide opacity-60">Current Weight</div>
+                            <div id="currentWeightDecimal" class="text-6xl font-bold leading-none stat-value">---</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-xs uppercase tracking-wide opacity-60">Time</div>
+                            <div id="chargeTimeValue" class="text-3xl font-semibold leading-none stat-value">-.-- s</div>
+                        </div>
+                    </div>
+                    <progress id="currentWeightProgressPencentage" class="progress progress-primary w-full" value="0" max="100"></progress>
+                    <div class="flex justify-between items-center text-sm">
+                        <span id="profileName" class="text-primary font-medium" onclick="onProfileNameClicked()">Unknown Profile</span>
+                        <span id="targetTag" class="opacity-70 bracket-tag">target ---</span>
+                        <span id="lagTag" class="opacity-50 bracket-tag text-xs">lag ---</span>
                     </div>
                 </div>
+            </div>
 
-                <!-- Stat 2: Charging Time -->
-                <div class="stat text-right">
-                    <div class="stat-title">Charging Time</div>
-                    <div id="chargeTimeValue" class="stat-value">-.-- s</div>
-                    <!-- These two lines are placeholders to ensure vertical alignment -->
-                    <div class="stat-desc"> </div>
-                    <div class="stat-desc"> </div>
+            <!-- Session strip -->
+            <div class="grid grid-cols-3 gap-2">
+                <div class="rounded-box bg-base-200 p-2 text-center">
+                    <div class="text-xs opacity-60">Throws</div>
+                    <div id="sessionThrows" class="text-2xl font-bold stat-value">0</div>
                 </div>
+                <div class="rounded-box bg-base-200 p-2 text-center">
+                    <div class="text-xs opacity-60">Success</div>
+                    <div id="sessionSuccess" class="text-2xl font-bold stat-value">--%</div>
+                </div>
+                <div class="rounded-box bg-base-200 p-2 text-center">
+                    <div class="text-xs opacity-60">Avg Time</div>
+                    <div id="sessionAvgTime" class="text-2xl font-bold stat-value">-.- s</div>
+                </div>
+            </div>
 
+            <!-- Bracket row -->
+            <div class="flex items-center justify-between gap-2">
+                <div class="join">
+                    <button id="bracketNormalBtn" class="btn btn-sm join-item btn-primary" onclick="setBracketMode(0)">Normal</button>
+                    <button id="bracketMatchBtn" class="btn btn-sm join-item" onclick="setBracketMode(1)">Match</button>
+                </div>
+                <div id="bracketTag" class="bracket-tag text-sm opacity-80">+/- 0.06 gr</div>
+                <div class="join">
+                    <button class="btn btn-sm btn-ghost join-item" onclick="resetSession()">Reset</button>
+                    <button class="btn btn-sm btn-outline btn-primary join-item" onclick="exportSessionCsv()">CSV</button>
+                </div>
             </div>
 
             <!-- Charge Mode Control -->
             <section id="sectionTricklerChargeMode">
-                <div class="grid grid-cols-1 gap-2 px-4">
-                    <!-- Row 1 -->
-                    <div class="divider">Charge Control</div>
-                    
-                    <!-- Row 2 -->
-                    <ul class="steps">
+                <div class="grid grid-cols-1 gap-3">
+                    <ul class="steps steps-horizontal text-xs">
                         <li id="chargeModeStateWait" class="step step-primary">Wait</li>
                         <li id="chargeModeStateCharging" class="step">Charging</li>
-                        <li id="chargeModeStateRemoveCup" class="step">Remove Cup</li>
-                        <li id="chargeModeStateReturnCup" class="step">Return Cup</li>
+                        <li id="chargeModeStateRemoveCup" class="step">Remove</li>
+                        <li id="chargeModeStateReturnCup" class="step">Return</li>
                     </ul>
 
-                    <!-- Row 3 -->
-                    <input id="chargeWeightInput" type="number" step="0.001" placeholder="Charge Weight" class="input input-bordered input-primary" pattern="[0-9]+([\.,][0-9]+)?"/>
+                    <input id="chargeWeightInput" type="number" inputmode="decimal" step="0.001" placeholder="Charge weight (gr)" class="input input-bordered input-primary input-lg text-center text-2xl" pattern="[0-9]+([\.,][0-9]+)?"/>
 
-                    <!-- Row 4 -->
                     <div class="grid grid-cols-2 gap-2">
                         <button id="confirmButton" class="btn btn-primary btn-lg" onclick="setChargeWeight()">Start</button>
                         <button id="stopButton" class="btn btn-warning btn-lg" onclick="enterChargeMode(false)" disabled="disabled">Stop</button>
                     </div>
+
+                    <button class="btn btn-neutral" onclick="scaleForceZero()">Zero Scale</button>
                 </div>
             </section>
 
             <!-- Cleanup Mode Control -->
             <section id="sectionTricklerCleanUpMode" style="display: none;">
-                <div class="grid grid-cols-1 gap-2 px-4">
-                    <div class="grid grid-cols-1 gap-2"> 
-                        <span class="label-text">Trickler Speed (rps)</span>
-                        <input id="tricklerSpeedSlider" type="range" min="-5" max="5" value="0" class="range range-lg" step="0.1" oninput="debouncedOnTricklerSpeedUpdate()"/>
-                        <button class="btn btn-primary w-full" onclick="onStopCleanupButtonClicked()">Stop</button>
-                    </div>
+                <div class="grid grid-cols-1 gap-3">
+                    <div class="text-sm opacity-70">Purge. Slide to run the tubes either direction. Stop returns to zero.</div>
+                    <input id="tricklerSpeedSlider" type="range" min="-5" max="5" value="0" class="range range-lg" step="0.1" oninput="debouncedOnTricklerSpeedUpdate()"/>
+                    <button class="btn btn-primary w-full" onclick="onStopCleanupButtonClicked()">Stop</button>
                 </div>
             </section>
 
-            <div class="grid grid-cols-1 gap-2 px-4">
-                <div class="divider">Scale Control</div>
-                <div class="grid grid-cols-1 gap-2">
-                    <button class="btn btn-neutral" onclick="scaleForceZero()">Scale Zero</button>
-					<div class="h-8"></div>
-					<!-- Gate Ratio Control -->
-                    <div class="grid grid-cols-1 gap-2">
-                        <div class="divider">Gate Control</div>
-                    </div>
-                      
-				</div>				
-                    
-				<div class="grid grid-cols-3 gap-2"> 
-					<button class="btn btn-neutral" onclick="servoGateSetState(2)">Gate Open</button>
-					
-					
-					<input id="servoGateRatioNumber"
-						   type="number"
-						   min="0"
-						   max="1"
-						   step="0.001"
-						   value="0.500"
-						   class="input input-bordered input-primary"
-						   readonly />
-								
-					<button class="btn btn-neutral" onclick="servoGateSetState(1)">Gate Close</button>
-				</div>
-				<div></div>
-                <div class="grid grid-cols-1 gap-2">
-                        <input id="servoGateRatioSlider"
-                               type="range"
-                               min="0"
-                               max="1000"
-                               step="1"
-                               value="500"
-                               class="range range-lg"
-                               oninput="onServoGateRatioInput(); debouncedServoGateRatioSend();" />
-				</div>
-				<div class="grid grid-cols-1 gap-2">
-					<div></div>
-					<div class="flex justify-between w-full">
-						<span class="label-text">0.000 = Open</span>
-						<span class="label-text">1.000 = Close</span>
-					</div>
-				</div>
-			</div>
-		</div>
-
-        
+            <!-- Servo gate, only shown when enabled in settings -->
+            <div id="gateControls" style="display: none;">
+                <div class="divider text-xs opacity-60">Servo Gate</div>
+                <div class="grid grid-cols-3 gap-2">
+                    <button class="btn btn-neutral" onclick="servoGateSetState(2)">Open</button>
+                    <input id="servoGateRatioNumber" type="number" min="0" max="1" step="0.001" value="0.500" class="input input-bordered input-primary text-center" readonly />
+                    <button class="btn btn-neutral" onclick="servoGateSetState(1)">Close</button>
+                </div>
+                <input id="servoGateRatioSlider" type="range" min="0" max="1000" step="1" value="500" class="range range-lg mt-2" oninput="onServoGateRatioInput(); debouncedServoGateRatioSend();" />
+                <div class="flex justify-between w-full text-xs opacity-60">
+                    <span>0.000 = Open</span>
+                    <span>1.000 = Close</span>
+                </div>
+            </div>
+        </div>
     </section>
 
-    <!-- The Settings Page -->
+    <!-- Learn Powder Page -->
+    <section id="sectionLearn" name="Learn Powder" style="display: none;">
+                    <!-- Learn Powder -->
+                    <div class="grid grid-cols-1 gap-3 px-3 pt-3 exclude-bottom-nav">
+                        <form id="learnConfigForm" action="/rest/learn_config" class="grid grid-cols-1 gap-3">
+                            <span class="label-text-alt opacity-70">Pan stays on the scale the whole time. 12 coarse throws then 12 fine throws at fixed speeds, the scale is re-zeroed after each one settles. Then it fits the selected profile and runs the confirmation throws at the target below. Select the profile on the Profiles page first.</span>
+
+                            <div class="grid grid-cols-2 gap-2">
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Coarse Throw (gr)</span>
+                                    <input type="number" class="input input-bordered" name="l0" step="0.01" min="1">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Fine Throw (gr)</span>
+                                    <input type="number" class="input input-bordered" name="l1" step="0.01" min="0.1">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Coarse Speed Ceiling (rps)</span>
+                                    <input type="number" class="input input-bordered" name="l2" step="0.1" min="0.5">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Fine Speed Ceiling (rps)</span>
+                                    <input type="number" class="input input-bordered" name="l3" step="0.1" min="0.2">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Confirm Target (gr)</span>
+                                    <input type="number" class="input input-bordered" name="l4" step="0.01" min="0">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Confirm Throws</span>
+                                    <input type="number" class="input input-bordered" name="l5" step="1" min="0" max="20">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Time Goal (s)</span>
+                                    <input type="number" class="input input-bordered" name="l6" step="0.5" min="1">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Cup Capacity (gr)</span>
+                                    <input type="number" class="input input-bordered" name="l7" step="10" min="20">
+                                </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Target Success (%)</span>
+                                    <input type="number" class="input input-bordered" name="l8" step="1" min="50" max="100">
+                                </div>
+                            </div>
+                            <button class="btn btn-neutral settings-apply-btn">Apply</button>
+                        </form>
+
+                        <div class="divider"></div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <button type="button" id="learnStartBtn" class="btn btn-primary" onclick="learnAction('start')">Start Learn</button>
+                            <button type="button" id="learnStopBtn" class="btn btn-warning" onclick="learnAction('stop')">Stop</button>
+                        </div>
+
+                        <div class="stat px-2 py-2">
+                            <div class="stat-title text-xs" id="learnPhase">Idle</div>
+                            <div class="stat-value text-2xl" id="learnWeight">---</div>
+                            <div class="stat-desc" id="learnMsg"></div>
+                            <progress id="learnProgress" class="progress progress-primary" value="0" max="12"></progress>
+                        </div>
+
+                        <div id="learnResults" class="grid grid-cols-2 gap-1 text-sm" style="display: none;">
+                            <div class="col-span-2 font-bold pt-2">Fitted profile</div>
+                            <div>Coarse flow</div><div class="text-right" id="lrCk">-</div>
+                            <div>Coarse max / min (rps)</div><div class="text-right" id="lrCmax">-</div>
+                            <div>Coarse tail at max</div><div class="text-right" id="lrCtail">-</div>
+                            <div>Coarse tail per rps</div><div class="text-right" id="lrCtk">-</div>
+                            <div>Measured lag, coarse / fine</div><div class="text-right" id="lrLag">-</div>
+                            <div>Lag spread (SD)</div><div class="text-right" id="lrLagSd">-</div>
+                            <div>Dead time</div><div class="text-right" id="lrDead">-</div>
+                            <div>Lag compensation</div><div class="text-right" id="lrLagUsed">-</div>
+                            <div>Coarse stop threshold</div><div class="text-right" id="lrCst">-</div>
+                            <div>Coarse Kp</div><div class="text-right" id="lrCkp">-</div>
+                            <div>Fine flow</div><div class="text-right" id="lrFk">-</div>
+                            <div>Fine max / min (rps)</div><div class="text-right" id="lrFmax">-</div>
+                            <div>Fine tail at max</div><div class="text-right" id="lrFtail">-</div>
+                            <div>Fine tail per rps</div><div class="text-right" id="lrFtk">-</div>
+                            <div>Fine Kp / taper window</div><div class="text-right" id="lrFkp">-</div>
+                            <div>Predicted throw</div><div class="text-right" id="lrPred">-</div>
+                            <div>Confirmation</div><div class="text-right" id="lrConfirm">-</div>
+                            <div id="lrLagWarn" class="col-span-2 text-warning text-sm" style="display: none;"></div>
+                            <button type="button" class="btn btn-primary col-span-2 mt-2" onclick="learnAction('save')">Save Profile to EEPROM</button>
+                            <button type="button" class="btn btn-outline col-span-2" onclick="exportLearnCsv()">Export Learn Throws CSV</button>
+                        </div>
+                    </div>
+
+    </section>
+
     <section id="sectionSettings" style="display: none;">
         <div class="drawer">
             <input id="settingsDrawer" type="checkbox" class="drawer-toggle" /> 
@@ -319,7 +431,7 @@
                             </div>
 
                             <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Fine Trickler Stop Threshold</span>
+                                <span class="label-text">Fine Trickler Stop Threshold (not used, the active bracket sets the stop point)</span>
                                 <input type="number" class="input input-bordered" name="c6" step="0.001">
                             </div>
 
@@ -392,6 +504,112 @@
 
                             <button class="btn btn-neutral settings-apply-btn">Apply</button>
                         </form>
+                    </section>
+
+                    <!-- Session / Bracket Settings -->
+                    <section class="settings-page" id="settings-session" name="Session &amp; Bracket" style="display: none;">
+                        <form id="sessionConfigForm" action="/rest/charge_mode_config" class="grid grid-cols-1 gap-3">
+                            <div class="grid grid-cols-2 gap-1">
+                                <span class="label-text">Screen Backlight Colour During Session</span>
+                                <input type="color" class="input w-full" name="c17">
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Active Bracket Mode</span>
+                                <select class="select select-bordered" name="c18">
+                                    <option value="0">Normal</option>
+                                    <option value="1">Match</option>
+                                </select>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Normal Bracket (+/- gr)</span>
+                                <select class="select select-bordered" name="c19">
+                                    <option value="1">0.02</option>
+                                    <option value="2">0.04</option>
+                                    <option value="3">0.06</option>
+                                    <option value="4">0.08</option>
+                                    <option value="5">0.10</option>
+                                    <option value="6">0.12</option>
+                                    <option value="7">0.14</option>
+                                    <option value="8">0.16</option>
+                                    <option value="9">0.18</option>
+                                    <option value="10">0.20</option>
+                                </select>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Match Bracket (+/- gr)</span>
+                                <select class="select select-bordered" name="c20">
+                                    <option value="1">0.02</option>
+                                    <option value="2">0.04</option>
+                                    <option value="3">0.06</option>
+                                    <option value="4">0.08</option>
+                                    <option value="5">0.10</option>
+                                </select>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Learn (adaptive profile tuning after each throw)</span>
+                                <select class="select select-bordered" name="c21">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Learn adjusts the selected profile's fine and coarse max speed and fine Kp in RAM, bounded to 50% to 140% of the starting values. Save the profile from the Profiles page to keep the result.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Lag Compensation</span>
+                                <select class="select select-bordered" name="c22">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Drives the motors off reading + rate x lag so the tubes slow before the scale catches up. The final stop is still on the real reading. Learn Powder measures the lag and turns this on.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Scale Lag (s)</span>
+                                <input type="number" class="input input-bordered" name="c23" step="0.05" min="0" max="3">
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Auto Lag</span>
+                                <select class="select select-bordered" name="c24">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Re-measures the lag on every throw (what landed after the motors stopped, divided by how fast the reading was climbing) and tracks it slowly. Live values are on the trickler page.</span>
+                            </div>
+
+                            <div class="divider"></div>
+
+                            <div class="grid grid-cols-2 gap-2 text-sm">
+                                <div>Pass</div><div id="cfgSessionPass" class="text-right">0</div>
+                                <div>Under</div><div id="cfgSessionUnder" class="text-right">0</div>
+                                <div>Over</div><div id="cfgSessionOver" class="text-right">0</div>
+                                <div>Time min / max</div><div id="cfgSessionTimeRange" class="text-right">- / -</div>
+                                <div>Error mean / SD</div><div id="cfgSessionErr" class="text-right">- / -</div>
+                                <div>Session length</div><div id="cfgSessionLen" class="text-right">-</div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" class="btn btn-ghost" onclick="resetSession(); loadSessionSummaryIntoSettings();">Reset Session</button>
+                                <button type="button" class="btn btn-outline btn-primary" onclick="exportSessionCsv()">Export CSV</button>
+                            </div>
+
+                            <button class="btn btn-neutral settings-apply-btn">Apply</button>
+                        </form>
+                    </section>
+
+                    <!-- Firmware update -->
+                    <section class="settings-page" id="settings-firmware" name="Firmware" style="display: none;">
+                        <div class="grid grid-cols-1 gap-3">
+                            <div class="text-sm">Running: <span id="fwRunning" class="font-mono">-</span></div>
+                            <span class="label-text-alt opacity-70">Pick the .uf2, press Update. It stages the image in spare flash, checks it, copies it over the running firmware and reboots. Stay on this page. If it ever fails to come back, BOOTSEL and drag the file still works.</span>
+                            <input type="file" id="fwFile" accept=".uf2,.bin" class="file-input file-input-bordered w-full" />
+                            <button type="button" id="fwUpdateBtn" class="btn btn-primary" onclick="firmwareUpdate()">Update</button>
+                            <progress id="fwProgress" class="progress progress-primary" value="0" max="100"></progress>
+                            <div id="fwStatus" class="text-sm font-mono"></div>
+                        </div>
                     </section>
 
                     <!-- Wireless Settings -->
@@ -787,15 +1005,19 @@
                 <label id="closeDrawerSide" for="settingsDrawer" aria-label="close sidebar" class="drawer-overlay"></label> 
                 <ul id=drawerSlide" class="menu p-2 w-60 min-h-full bg-base-200">
                     <!-- Sidebar content here -->
-                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-scale')">Scale</a></li>
-                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-profile')">Profiles</a></li>
+                    <li><a class="text-lg" onclick="onNavButtonClicked('learn')">Learn Powder</a></li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-session')">Session &amp; Bracket</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-charge-mode')">Charge Mode</a></li>
-                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-wireless')">Wireless</a></li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-profile')">Profiles</a></li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-scale')">Scale</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-coarse-motor')">Coarse Motor</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-fine-motor')">Fine Motor</a></li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-servo-gate')">Servo Gate</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-neopixel-led')">Neopixel LED</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-mini-12864-module')">Mini 12864 Module</a></li>
-                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-servo-gate')">Servo Gate</a></li>
+                    <li class="menu-title text-xs opacity-50 pt-2">System</li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-wireless')">Wireless</a></li>
+                    <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-firmware')">Firmware</a></li>
                     <li><a class="text-lg" onclick="onSettingsLinkClicked('settings-system-control')">System Control</a></li>
                 </ul>
             </div>
@@ -818,6 +1040,12 @@
             <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12.25V1m0 11.25a2.25 2.25 0 0 0 0 4.5m0-4.5a2.25 2.25 0 0 1 0 4.5M4 19v-2.25m6-13.5V1m0 2.25a2.25 2.25 0 0 0 0 4.5m0-4.5a2.25 2.25 0 0 1 0 4.5M10 19V7.75m6 4.5V1m0 11.25a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5ZM16 19v-2"/>
         </svg>
         <span class="text-sm text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-blue-500">Settings</span>
+    </button>
+    <button id="learnNavButton" onclick="onNavButtonClicked('learn')">
+        <svg class="w-6 h-6" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
+            <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l4-9 4 9M6 14h4M14 8h6M14 12h6M14 16h4"/>
+        </svg>
+        <span class="text-sm">Learn</span>
     </button>
     <button id="purgeNavButton" onclick="onNavButtonClicked('purge')">
         <svg class="w-6 h-6 text-gray-800 dark:text-white" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24">
@@ -1167,6 +1395,7 @@
             const charge_mode_event = data["s3"];
             const profile_name = data["s4"];
             const charge_time_seconds = data["s5"] || "-.--";
+            _updateSessionWidgets(data);
 
             var percentage = 0;
             if (charge_weight_set_point == 0) {
@@ -1183,6 +1412,26 @@
             profileName = document.getElementById("profileName");
             profileName.innerText = String(profile_name);
             
+            const lagTag = document.getElementById("lagTag");
+            if (lagTag && data["s11"] !== undefined) {
+                const used = Number(data["s11"]).toFixed(2);
+                const meas = Number(data["s12"]);
+                lagTag.innerText = meas > 0 ? `lag ${used}s (last ${meas.toFixed(2)})` : `lag ${used}s`;
+            }
+
+            const targetTag = document.getElementById("targetTag");
+            if (targetTag) {
+                targetTag.innerText = (charge_weight_set_point > 0) ? ("target " + Number(charge_weight_set_point).toFixed(2)) : "target ---";
+            }
+
+            // Throw result popups clear themselves once the cup is back and the scale is zeroed
+            if (charge_mode_state == ChargeModeState.WAIT || charge_mode_state == ChargeModeState.CHARGING || charge_mode_state == ChargeModeState.EXIT) {
+                for (const id of ["underThrowDialog", "overThrowDialog"]) {
+                    const dlg = document.getElementById(id);
+                    if (dlg && dlg.open) { dlg.close(); }
+                }
+            }
+
             // Find the charge time element and update its text content
             const chargeTimeElement = document.getElementById('chargeTimeValue');
             if (chargeTimeElement) {
@@ -1223,6 +1472,368 @@
             clearTimeout(pollSetTimeoutId);
             pollSetTimeoutId = setTimeout(pollChargeModeStatus, 500);
         })
+    }
+
+    // ---------------------------------------------------------------
+    // Session / bracket
+    // ---------------------------------------------------------------
+    function _updateSessionWidgets(data) {
+        const throws = data["s10"];
+        const success = data["s9"];
+        const avg = data["s8"];
+        const bracket = data["s6"];
+        const mode = data["s7"];
+
+        if (throws === undefined) { return; }
+
+        document.getElementById("sessionThrows").innerText = throws;
+
+        const successEl = document.getElementById("sessionSuccess");
+        successEl.classList.remove("session-pass", "session-warn", "session-fail");
+        if (throws > 0) {
+            successEl.innerText = Number(success).toFixed(0) + "%";
+            if (success >= 95) successEl.classList.add("session-pass");
+            else if (success >= 85) successEl.classList.add("session-warn");
+            else successEl.classList.add("session-fail");
+        }
+        else {
+            successEl.innerText = "--%";
+        }
+
+        document.getElementById("sessionAvgTime").innerText = throws > 0 ? Number(avg).toFixed(1) + " s" : "-.- s";
+        document.getElementById("bracketTag").innerText = "+/- " + Number(bracket).toFixed(2) + " gr";
+
+        const normalBtn = document.getElementById("bracketNormalBtn");
+        const matchBtn = document.getElementById("bracketMatchBtn");
+        if (mode == 1) {
+            matchBtn.classList.add("btn-primary");
+            normalBtn.classList.remove("btn-primary");
+        }
+        else {
+            normalBtn.classList.add("btn-primary");
+            matchBtn.classList.remove("btn-primary");
+        }
+    }
+
+    function setBracketMode(mode) {
+        fetch(`/rest/charge_mode_state?s7=${encodeURIComponent(mode)}`)
+        .then(response => response.json())
+        .then(data => { _updateSessionWidgets(data); })
+        .catch(error => { console.error("Failed to set bracket mode"); });
+    }
+
+    function resetSession() {
+        fetch("/rest/session_summary?a0=reset")
+        .then(response => response.json())
+        .then(data => {
+            _updateSessionWidgets({ "s10": 0, "s9": 0, "s8": 0, "s6": 0, "s7": 0 });
+            _restartPoll();
+        })
+        .catch(error => { console.error("Failed to reset session"); });
+    }
+
+    function loadSessionSummaryIntoSettings() {
+        fetch("/rest/session_summary")
+        .then(response => response.json())
+        .then(t => {
+            document.getElementById("cfgSessionPass").innerText = t["t1"];
+            document.getElementById("cfgSessionUnder").innerText = t["t2"];
+            document.getElementById("cfgSessionOver").innerText = t["t3"];
+            document.getElementById("cfgSessionTimeRange").innerText = Number(t["t5"]).toFixed(2) + " / " + Number(t["t6"]).toFixed(2) + " s";
+            document.getElementById("cfgSessionErr").innerText = Number(t["t7"]).toFixed(3) + " / " + Number(t["t8"]).toFixed(3) + " gr";
+            const len = Number(t["t11"]);
+            document.getElementById("cfgSessionLen").innerText = Math.floor(len / 60) + " min";
+        })
+        .catch(error => { console.error("Failed to load session summary"); });
+    }
+
+    async function exportSessionCsv() {
+        const resultNames = ["PASS", "UNDER", "OVER"];
+        const modeNames = ["Normal", "Match"];
+
+        // Profile names for the CSV
+        let profileNames = {};
+        try {
+            const resp = await fetch("/rest/profile_summary");
+            const summary = await resp.json();
+            const dict = summary["s0"] || {};
+            for (const key in dict) {
+                profileNames[key] = dict[key];
+            }
+        } catch (e) { /* fall back to index */ }
+
+        let rows = [];
+        let from = 0;
+        let total = 0;
+        do {
+            const resp = await fetch(`/rest/session_log?from=${from}&n=20`);
+            const page = await resp.json();
+            total = page["total"];
+            const pageRows = page["rows"];
+            if (!pageRows || pageRows.length == 0) { break; }
+            rows = rows.concat(pageRows);
+            from += pageRows.length;
+        } while (from < total);
+
+        const summaryResp = await fetch("/rest/session_summary");
+        const t = await summaryResp.json();
+
+        let csv = "throw,uptime_s,profile,mode,bracket_gr,target_gr,actual_gr,error_gr,result,total_s,coarse_s,fine_s\n";
+        for (const r of rows) {
+            const seq = r[0], uptime = r[1], target = r[2], actual = r[3], totalS = r[4], coarseS = r[5], bracket = r[6], result = r[7], pidx = r[8], mode = r[9];
+            const pname = (profileNames[pidx] !== undefined) ? String(profileNames[pidx]).replace(/,/g, " ") : ("profile" + pidx);
+            csv += [
+                seq,
+                (uptime / 1000).toFixed(1),
+                pname,
+                modeNames[mode] || mode,
+                Number(bracket).toFixed(2),
+                Number(target).toFixed(3),
+                Number(actual).toFixed(3),
+                (actual - target).toFixed(3),
+                resultNames[result] || result,
+                Number(totalS).toFixed(2),
+                Number(coarseS).toFixed(2),
+                (totalS - coarseS).toFixed(2)
+            ].join(",") + "\n";
+        }
+        csv += "\n";
+        csv += `summary,throws,${t["t0"]},pass,${t["t1"]},under,${t["t2"]},over,${t["t3"]},success_pct,${t["t9"]}\n`;
+        csv += `summary,avg_s,${t["t4"]},min_s,${t["t5"]},max_s,${t["t6"]},err_mean_gr,${t["t7"]},err_sd_gr,${t["t8"]}\n`;
+
+        const now = new Date();
+        const stamp = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0") + "-" + String(now.getDate()).padStart(2, "0")
+                    + "_" + String(now.getHours()).padStart(2, "0") + String(now.getMinutes()).padStart(2, "0");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `opentrickler_session_${stamp}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // ---------------------------------------------------------------
+    // Learn Powder
+    // ---------------------------------------------------------------
+    var learnPollTimeoutId;
+    const LearnPhaseNames = ["Idle", "Zeroing", "Coarse", "Fine", "Fitting", "Confirm", "Done", "Stopped", "Error", "EMPTY THE CUP"];
+
+    function learnAction(action) {
+        fetch(`/rest/learn_state?a0=${encodeURIComponent(action)}`)
+        .then(response => response.json())
+        .then(data => { _renderLearn(data); })
+        .catch(error => { console.error("Learn action failed"); });
+    }
+
+    function _renderLearn(d) {
+        const st = d["st"];
+        const phaseEl = document.getElementById("learnPhase");
+        const running = (st >= 1 && st <= 5) || st == 9;
+        let phase = LearnPhaseNames[st] || "?";
+        if (st == 2 || st == 3 || st == 5) {
+            phase += ` ${d["i"] + 1} / ${d["n"]}`;
+            if (st != 5) phase += `  at ${Number(d["sp"]).toFixed(2)} rps`;
+        }
+        phaseEl.innerText = phase;
+        document.getElementById("learnWeight").innerText = d["w"] >= -0.5 ? Number(d["w"]).toFixed(2) : "---";
+        document.getElementById("learnMsg").innerText = (d["msg"] || "") + (d["cup"] > 0 ? `   cup ${Number(d["cup"]).toFixed(0)} gr` : "");
+        const prog = document.getElementById("learnProgress");
+        prog.max = d["n"];
+        prog.value = running ? d["i"] : (st == 6 ? d["n"] : 0);
+
+        document.getElementById("learnStartBtn").disabled = running;
+        document.getElementById("learnStopBtn").disabled = !running;
+
+        const res = document.getElementById("learnResults");
+        if (d["ok"] == true || d["ok"] == "true") {
+            res.style.display = "grid";
+            document.getElementById("lrCk").innerText = Number(d["ck"]).toFixed(3) + " gr/s per rps";
+            document.getElementById("lrCmax").innerText = Number(d["cmax"]).toFixed(2) + " / " + Number(d["cmin"]).toFixed(2);
+            document.getElementById("lrCtail").innerText = Number(d["ct"]).toFixed(3) + " gr, sd " + Number(d["cts"]).toFixed(3);
+            document.getElementById("lrCtk").innerText = Number(d["ctk"]).toFixed(3) + " gr per rps";
+            document.getElementById("lrFtk").innerText = Number(d["ftk"]).toFixed(4) + " gr per rps";
+            document.getElementById("lrLag").innerText = Number(d["clag"]).toFixed(2) + " s / " + Number(d["flag"]).toFixed(2) + " s";
+            document.getElementById("lrLagUsed").innerText = (d["pred"] == true || d["pred"] == "true") ? ("on, " + Number(d["lagu"]).toFixed(2) + " s") : "off";
+            document.getElementById("lrLagSd").innerText = Number(d["lagsd"]).toFixed(2) + " s";
+            document.getElementById("lrDead").innerText = Number(d["dead"]).toFixed(2) + " s";
+            const lagWarn = document.getElementById("lrLagWarn");
+            if (Number(d["clag"]) > 1.0) {
+                lagWarn.style.display = "block";
+                lagWarn.innerText = `The scale is reading about ${Number(d["clag"]).toFixed(2)} s behind the coarse tube. Lag compensation covers some of that, but a lag this size costs speed and consistency. On an A&D FX-i: bASFnc SPd = 2 (20 updates a second), dout Prt = 3 (stream), Sif bPS = 5 (19200), RESPONSE = FAST.`;
+            } else {
+                lagWarn.style.display = "none";
+            }
+            document.getElementById("lrCst").innerText = Number(d["cst"]).toFixed(3) + " gr";
+            document.getElementById("lrCkp").innerText = Number(d["ckp"]).toFixed(3);
+            document.getElementById("lrFk").innerText = Number(d["fk"]).toFixed(4) + " gr/s per rps";
+            document.getElementById("lrFmax").innerText = Number(d["fmax"]).toFixed(2) + " / " + Number(d["fmin"]).toFixed(2);
+            document.getElementById("lrFtail").innerText = Number(d["ft"]).toFixed(3) + " gr, sd " + Number(d["fts"]).toFixed(3);
+            document.getElementById("lrFkp").innerText = Number(d["fkp"]).toFixed(3) + " / " + Number(d["ftw"]).toFixed(2) + " gr";
+            document.getElementById("lrPred").innerText = `${Number(d["pt"]).toFixed(1)} s (coarse ${Number(d["pc"]).toFixed(1)}, fine ${Number(d["pf"]).toFixed(1)})` + ((d["goal"] == true || d["goal"] == "true") ? " meets goal" : " misses goal");
+            document.getElementById("lrConfirm").innerText = `round ${d["cr"]}: ${d["cp"]} / ${d["cn"]} pass, avg ${Number(d["cavg"]).toFixed(1)} s` + ((d["met"] == true || d["met"] == "true") ? ", target met" : ", target missed");
+        }
+        else {
+            res.style.display = "none";
+        }
+    }
+
+    async function exportLearnCsv() {
+        const d = await (await fetch("/rest/learn_throws")).json();
+        let csv = "phase,throw,speed_rps,time_s,stop_gr,settled_gr,flow_gps,tail_gr,rate_at_stop_gps,lag_s,dead_time_s\n";
+        for (const r of d["rows"]) {
+            csv += [(r[0] == 0 ? "coarse" : "fine"), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10]].join(",") + "\n";
+        }
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "opentrickler_learn_throws.csv";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function loadLearnPage() {
+        const form = document.getElementById("learnConfigForm");
+        fetch(form.getAttribute("action"))
+        .then(response => response.json())
+        .then(data => {
+            for (const key in data) {
+                const element = form.querySelector('[name="' + key + '"]');
+                if (element) { element.value = String(data[key]); }
+            }
+        })
+        .catch(() => {});
+        pollLearnState();
+    }
+
+    // Servo gate controls only take up room when the gate is enabled in settings
+    function refreshGateVisibility() {
+        fetch("/rest/servo_gate_config")
+        .then(response => response.json())
+        .then(data => {
+            const on = (data["c0"] == true || data["c0"] == "true");
+            document.getElementById("gateControls").style.display = on ? "block" : "none";
+        })
+        .catch(() => {});
+    }
+
+    function pollLearnState() {
+        fetch("/rest/learn_state")
+        .then(response => response.json())
+        .then(data => { _renderLearn(data); })
+        .catch(error => { console.error("Learn state read failed"); })
+        .finally(() => {
+            clearTimeout(learnPollTimeoutId);
+            const learnSection = document.getElementById("sectionLearn");
+            if (learnSection && learnSection.style.display != "none") {
+                learnPollTimeoutId = setTimeout(pollLearnState, 500);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Firmware update over WiFi
+    // ---------------------------------------------------------------
+    const UF2_MAGIC0 = 0x0A324655, UF2_MAGIC1 = 0x9E5D5157, UF2_MAGIC_END = 0x0AB16F30;
+    const RP2350_ARM_S = 0xE48BFF59, RP2040_FAMILY = 0xE48BFF56;
+    const FLASH_BASE = 0x10000000;
+
+    function _fwStatus(text) { document.getElementById("fwStatus").innerText = text; }
+    function _fwProgress(pct) { document.getElementById("fwProgress").value = pct; }
+
+    // Turn a .uf2 into the raw flash image. Returns a Uint8Array starting at 0x10000000.
+    function uf2ToImage(buf) {
+        const dv = new DataView(buf);
+        if (buf.byteLength % 512 != 0 || dv.getUint32(0, true) != UF2_MAGIC0) {
+            return new Uint8Array(buf);   // not a uf2, treat as raw .bin
+        }
+        let blocks = [];
+        for (let off = 0; off + 512 <= buf.byteLength; off += 512) {
+            if (dv.getUint32(off, true) != UF2_MAGIC0 || dv.getUint32(off + 4, true) != UF2_MAGIC1 || dv.getUint32(off + 508, true) != UF2_MAGIC_END) {
+                throw new Error("Corrupt UF2 block at " + off);
+            }
+            const flags = dv.getUint32(off + 8, true);
+            const addr = dv.getUint32(off + 12, true);
+            const size = dv.getUint32(off + 16, true);
+            const family = dv.getUint32(off + 28, true);
+            const hasFamily = (flags & 0x2000) != 0;
+            if (hasFamily && family != RP2350_ARM_S && family != RP2040_FAMILY) continue;   // skip the absolute marker block
+            if (family == RP2040_FAMILY) throw new Error("That is a Pico W (RP2040) image, this board is a Pico 2 W");
+            if (addr < FLASH_BASE) continue;
+            blocks.push({ addr: addr, data: new Uint8Array(buf, off + 32, size) });
+        }
+        if (blocks.length == 0) throw new Error("No RP2350 flash blocks in this file");
+        blocks.sort((a, b) => a.addr - b.addr);
+        if (blocks[0].addr != FLASH_BASE) throw new Error("Image does not start at the flash base");
+        const last = blocks[blocks.length - 1];
+        const total = last.addr + last.data.length - FLASH_BASE;
+        const img = new Uint8Array(total).fill(0xFF);
+        for (const b of blocks) img.set(b.data, b.addr - FLASH_BASE);
+        return img;
+    }
+
+    function crc32(bytes) {
+        let crc = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) {
+            crc ^= bytes[i];
+            for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+        }
+        return (~crc) >>> 0;
+    }
+
+    async function firmwareUpdate() {
+        const input = document.getElementById("fwFile");
+        const btn = document.getElementById("fwUpdateBtn");
+        if (!input.files || input.files.length == 0) { _fwStatus("Pick a .uf2 first"); return; }
+
+        btn.disabled = true;
+        _fwProgress(0);
+        try {
+            _fwStatus("Reading file");
+            const buf = await input.files[0].arrayBuffer();
+            const img = uf2ToImage(buf);
+            const crc = crc32(img).toString(16).padStart(8, "0");
+            _fwStatus(`Image ${(img.length / 1024).toFixed(0)} KB, crc ${crc}. Uploading`);
+            _fwProgress(10);
+
+            await fetch("/rest/ota_state?a0=reset");
+
+            const up = await fetch("/ota/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: img });
+            const upState = await up.json();
+            if (upState["st"] != 2) throw new Error("Upload failed: " + upState["msg"]);
+            _fwProgress(70);
+
+            _fwStatus("Verifying");
+            const ver = await (await fetch(`/rest/ota_state?a0=verify&crc=${crc}`)).json();
+            if (ver["st"] != 3) throw new Error("Verify failed: " + ver["msg"]);
+            _fwProgress(80);
+
+            _fwStatus("Flashing. Do not power off. Reboots in about 10 s");
+            await fetch("/rest/ota_state?a0=apply");
+            _fwProgress(90);
+
+            // Wait for it to come back
+            await new Promise(r => setTimeout(r, 12000));
+            for (let i = 0; i < 30; i++) {
+                try {
+                    const d = await (await fetch("/rest/ota_state", { cache: "no-store" })).json();
+                    document.getElementById("fwRunning").innerText = d["ver"];
+                    _fwProgress(100);
+                    _fwStatus("Back up on " + d["ver"]);
+                    btn.disabled = false;
+                    return;
+                } catch (e) {
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+            _fwStatus("No answer yet. Give it a minute and reload the page.");
+        }
+        catch (e) {
+            _fwStatus(String(e.message || e));
+        }
+        btn.disabled = false;
     }
 
     // Send scale force zero command
@@ -1361,14 +1972,37 @@
         const sectionTricklerCleanUpMode = document.getElementById("sectionTricklerCleanUpMode");
 
         const sectionSettings = document.getElementById("sectionSettings");
+        const sectionLearn = document.getElementById("sectionLearn");
 
         const settingsNavButton = document.getElementById("settingsNavButton")
         const purgeNavButton = document.getElementById("purgeNavButton");
         const tricklerNavButton = document.getElementById("tricklerNavButton");
+        const learnNavButton = document.getElementById("learnNavButton");
+
+        sectionLearn.style.display = "none";
+        learnNavButton.classList.remove("active");
+        clearTimeout(learnPollTimeoutId);
 
         switch (button) {
+            case "learn":
+                {
+                    const drawer = document.getElementById("settingsDrawer");
+                    if (drawer && drawer.checked) { drawer.checked = false; }
+                }
+                enterCleanUpMode(false);
+                sectionSettings.style.display = "none";
+                sectionTrickler.style.display = "none";
+                sectionLearn.style.display = "block";
+                settingsNavButton.classList.remove("active");
+                purgeNavButton.classList.remove("active");
+                tricklerNavButton.classList.remove("active");
+                learnNavButton.classList.add("active");
+                clearTimeout(pollSetTimeoutId);
+                loadLearnPage();
+                break;
             case "trickler":
                 enterCleanUpMode(false);
+                refreshGateVisibility();
 
                 // Section control
                 sectionSettings.style.display = "none";
@@ -1454,6 +2088,16 @@
         const settingsDrawer = document.getElementById("settingsDrawer");
         if (settingsDrawer.checked) {
             settingsDrawer.checked = false;
+        }
+
+        if (sectionId == "settings-session") {
+            loadSessionSummaryIntoSettings();
+        }
+        if (sectionId == "settings-firmware") {
+            fetch("/rest/ota_state").then(r => r.json()).then(d => {
+                document.getElementById("fwRunning").innerText = d["ver"];
+                document.getElementById("fwStatus").innerText = d["msg"] || "";
+            }).catch(() => {});
         }
 
         // Populate values

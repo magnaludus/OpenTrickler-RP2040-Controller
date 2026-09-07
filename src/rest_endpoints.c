@@ -14,6 +14,9 @@
 #include "cleanup_mode.h"
 #include "servo_gate.h"
 #include "system_control.h"
+#include "session_stats.h"
+#include "learn_mode.h"
+#include "ota.h"
 
 // Generated headers by html2header.py under scripts
 #include "display_mirror.html.h"
@@ -97,6 +100,12 @@ bool rest_endpoints_init(bool default_wizard) {
     rest_register_handler("/rest/profile_summary", http_rest_profile_summary);
     rest_register_handler("/rest/servo_gate_state", http_rest_servo_gate_state);
     rest_register_handler("/rest/servo_gate_config", http_rest_servo_gate_config);
+    rest_register_handler("/rest/session_summary", http_rest_session_summary);
+    rest_register_handler("/rest/session_log", http_rest_session_log);
+    rest_register_handler("/rest/learn_state", http_rest_learn_state);
+    rest_register_handler("/rest/learn_config", http_rest_learn_config);
+    rest_register_handler("/rest/learn_throws", http_rest_learn_throws);
+    rest_register_handler("/rest/ota_state", http_rest_ota_state);
     rest_register_handler("/display_buffer", http_get_display_buffer);
     rest_register_handler("/display_mirror", http_display_mirror);
 

@@ -20,6 +20,8 @@
 #include "scale.h"
 #include "display.h"
 #include "charge_mode.h"
+#include "learn_mode.h"
+#include "ota.h"
 #include "rest_endpoints.h"
 #include "wireless.h"
 #include "neopixel_led.h"
@@ -55,6 +57,8 @@ int main()
 
     // Initialize charge mode settings
     charge_mode_config_init();
+    learn_mode_init();
+    ota_init();
 
     // Initialize profile data
     profile_data_init();

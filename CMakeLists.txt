@@ -112,6 +112,15 @@ target_link_libraries("${TARGET_NAME}"
     pico_lwip_freertos
     pico_lwip_mdns
     # pico_lwip_http
+
+    # Firmware update over WiFi
+    pico_flash
+    hardware_flash
+    hardware_watchdog
+)
+
+target_compile_definitions("${TARGET_NAME}" PRIVATE
+    PICO_FLASH_SAFE_EXECUTE_SUPPORT_FREERTOS_SMP=1
 )
 
 target_link_options("${TARGET_NAME}" PUBLIC -Wl,--gc-sections -Wl,--print-memory-usage)
