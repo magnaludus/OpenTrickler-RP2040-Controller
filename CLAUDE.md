@@ -32,26 +32,46 @@ New files: `learn_mode.cpp/h`, `session_stats.c/h`, `ota.c/h`,
 `rest_endpoints.c`, `menu.c`, `mui_menu.c`, `neopixel_led.h`, `lwipopts.h`,
 `CMakeLists.txt`.
 
-## This machine's calibration numbers (from v1.11 Learn CSV)
+## This machine's calibration numbers
 
-- Coarse tube: **10.1 gr/s per rps**
-- Fine tube: **0.33 gr/s per rps**
+From the v1.11 bench CSV:
+- Coarse tube: **10.1 gr/s per rps**, fine tube: **0.33 gr/s per rps**
 - Scale lag: **0.55 s** — consistent across both tubes and all speeds tested
 
-These are the values the Learn-mode fit should reproduce. If a fresh fit's
-lag column isn't close to 0.55 s, or the coarse flow constant isn't close to
-10 (not ~1), the fit is wrong before looking at anything else.
+From a session-v1.14 Learn run (profile 8208XBR, confirm target 30gr, coarse
+speed ceiling 6 rps but hardware-capped to ~0.83 rps):
+- Fitted: coarse flow 10.676 gr/s/rps, fine flow 0.318 gr/s/rps, measured lag
+  0.53s coarse / 0.74s fine, lag SD 0.19s, dead time 0.83s
+- Fitted `coarse_stop_threshold` = **5.258 gr** — matches the ~5.3gr the user
+  found by hand-tuning down from an earlier run's ~5.8gr fit. The auto-tune
+  fit is landing in the right place; see "Known open items" below for why
+  its own confirm phase still looked slow.
+- Real 15-throw production session at 26gr target, same profile: **100%
+  pass, avg 7.02s/throw, error mean −0.037gr, error SD 0.017gr, always
+  under (never over) target.** This is the reference "it's working well"
+  baseline — Learn changes should be checked against not regressing this.
 
 ## Where we left off
 
-Waiting on a Learn run on `session-v1.14` on real hardware, then the
-exported **Learn Throws CSV** and the resulting fitted profile numbers.
-Expectation: lag ≈ 0.55 s, coarse flow ≈ 10 gr/s/rps, and a 40 gr charge
-landing in the 6–8 s range end to end. When the CSV is dropped into this
-repo, read it directly to check the fit rather than waiting for a summary.
+The `coarse_stop_threshold` mystery (5.8→5.3 by hand) is explained, not a
+live bug: see "Known open items" for the confirm-phase vs. live-tuning gap.
+No open ask right now — next real signal will be another Learn run or
+session CSV the user drops in.
 
 ## Known open items
 
+- **Confirm phase can't show the live-tuned steady state.** `learn_post_throw()`
+  (`src/charge_mode.cpp:167`) only tightens `coarse_stop_threshold` after 5
+  *consecutive* clean passes (`clean_streak >= 5`, then a 5% nudge). Learn's
+  own confirmation run defaults to `LEARN_CONFIRM_THROWS = 5`
+  (`src/learn_mode.h:14`), so it can pass all 5 and still never trigger a
+  single tightening step — a 6th throw would be needed to see it. This is
+  why a Learn confirm can show a much slower avg time (e.g. 13.4s) than what
+  the machine actually settles into over a longer real session (e.g. 7.02s
+  over 15 throws) — not a bug in the fit itself, just a short sample window.
+  If we want Learn's own numbers to reflect steady-state performance, either
+  raise `confirm_throws` well past 5, or teach `fit_profile()`/confirm to
+  account for expected live-tuning convergence. Not done — flagging only.
 - Learn-mode behavior on hardware *past* the initial fit (i.e. once tuned,
   running further charges) is only lightly tested.
 - The WiFi OTA update's auto-reboot-after-flash path was fixed in v1.10, but
