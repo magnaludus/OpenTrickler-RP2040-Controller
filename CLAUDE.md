@@ -64,6 +64,20 @@ live bug: see "Known open items" for the confirm-phase vs. live-tuning gap.
 No open ask right now — next real signal will be another Learn run or
 session CSV the user drops in.
 
+## Version screen quirk
+
+`Ver:`/`VCS:` come from upstream's `scripts/gen_version.py` (`git describe
+--tags`, expecting eamars-style `vX.Y` tags) — separate from our own
+`Build:` line (`SESSION_BUILD_TAG` in `session_version.h`). This session's
+GitHub App can't push tag refs to the fork (`git push --tags`/single-tag
+pushes 403 everywhere tried, including from the properly-attached clone),
+so `Ver:` will keep reading `no-tag` and `VCS:` will show a bare commit
+hash instead of upstream's `vX.Y-N-gHASH` format. Fixed the actual bug in
+that script (it used to blank the hash too on a no-tag build, showing
+`VCS:` empty) but there's no way to restore full `vX.Y` versioning without
+manually creating a tag through the GitHub web UI on the fork — not done,
+low priority since `Build:` already answers "what firmware is this."
+
 ## Known open items
 
 - **Confirm phase can't show the live-tuned steady state.** `learn_post_throw()`
