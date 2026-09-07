@@ -4,6 +4,24 @@ This repo is for the firmware that utilises the Raspberry Pi RP2040/RP2350 micro
 
 Join our [discord server](https://discord.gg/ZhdThA2vrW) for help and development information. 
 
+## This fork
+
+This is a fork of the upstream [eamars/OpenTrickler-RP2040-Controller](https://github.com/eamars/OpenTrickler-RP2040-Controller), adding a session-tracking, auto-tuning, and OTA-update layer on top of the stock charge-mode firmware. It is not merged upstream or otherwise officially affiliated. Everything else in this README - hardware, supported scales, build steps - is upstream documentation and applies here unchanged.
+
+### What's added
+
+- **Session statistics** - every throw is logged (target, actual, error, timing, pass/under/over) and exportable as CSV from the web portal.
+- **Brackets** - Normal and Match acceptance brackets in 0.02gr steps, selectable from the portal, with an amber backlight while a session is active.
+- **Learn Powder** - an auto-tune wizard that runs calibration throws across a spread of coarse/fine speeds, fits each tube's flow rate and the scale's reporting lag, and produces a starting profile (speeds, PID gains, coarse/fine handoff) for a target charge weight and time goal, then confirms it with real throws.
+- **Per-throw adaptive tuning** - once running, a profile can keep narrowing its own margins on a run of clean throws and back off on a miss (opt-in via "Learn" in Charge Mode settings). The narrowing is bounded by the coarse tube's own measured variance from the last Learn fit, not just a fixed streak count, so it can't tune past what the hardware can actually repeat.
+- **Phase-split lag compensation** - the scale's reporting lag is measured and compensated separately for the coarse and fine tubes, since they consistently measure differently, rather than one shared value applied to both.
+- **WiFi firmware update** - flash a new `.uf2` from Settings > Firmware without pulling the board for USB/BOOTSEL.
+- **Mobile web portal layout** - gate controls hidden unless the servo gate is enabled, Learn reachable from the bottom bar and the menu, self-clearing over/under charge popups.
+
+### Compatibility note
+
+This fork's Charge Mode EEPROM layout has diverged from upstream (lag compensation and per-throw tuning added new fields). Flashing this firmware over a stock eamars build, or vice versa, resets Charge Mode settings to firmware defaults - coarse stop threshold, brackets, LED colours, and the lag/learn/predict toggles. Re-run Learn Powder or reconfigure your profile afterward.
+
 ## Features
 
 ### Supported Scales
