@@ -275,6 +275,42 @@ the controller's `new_speed = 0` hold kicks in sooner than it needs to.
 That costs time, not accuracy, and the much smaller handoff shrinks the
 window where it matters. Flagged, not fixed - it needs its own data.
 
+## Objective: hand the bulk as much as it can, on two user dials
+
+Follow-up from the user: the handoff shouldn't be a number the fit happens
+to land on, it should be adjustable, and Learn should be getting bulk as
+close as it can without overthrowing. (`coarse_stop_threshold` was already
+editable - the misread was that 2.30gr looked hardcoded when it was a
+computed result. Worth keeping in mind for how results get presented.)
+
+Objective changed from *fastest predicted throw* to **tightest handoff
+that still meets the time goal**, fastest on a tie, falling back to
+fastest only when nothing meets the goal. Safe to optimise this way
+because every grid point already carries the same margin by construction,
+so tightening the handoff never spends safety - it spends time.
+
+That makes the two existing/new settings a clean pair of dials:
+
+- **Time Goal** (`l6`, default now **7.0s**, was 8.5s) is the trade. The
+  fit spends every second under it buying a closer handoff. At 40gr:
+  6.5s -> 1.84gr, 7.0s -> 1.61gr, 8.5s -> 0.99gr, 10s -> 0.83gr.
+- **Bulk Safety Factor** (`l9`, new, default **1.5**, clamped 1.0-5.0) is
+  the margin - the multiple of the coarse tube's measured 3 sigma stop
+  scatter the handoff must cover. At 40gr / 7.0s goal: 1.0x -> 1.15gr,
+  1.5x -> 1.61gr, 2.0x -> 1.95gr, 3.0x -> 2.85gr. Raise it on overthrows.
+
+At the new defaults the bulk carries ~96% of the charge at every weight
+the user loads (26/30/40/42.5gr), throws land ~6.8-6.9s predicted.
+
+`EEPROM_LEARN_CONFIG_REV` 2 -> 3 for the added field. This resets **Learn
+Powder settings only** - learn config lives at its own EEPROM base
+address, so profiles, charge mode config and `coarse_stop_threshold` are
+untouched. Note the default Time Goal changes with the reset.
+
+Also fixed while in `http_rest_learn_config`: the range clamps ran *after*
+the EEPROM save, so an out-of-range value could be written and reloaded on
+the next boot. Clamps now run first.
+
 ## Where we left off
 
 Two real, data-backed threads open, both flagged not implemented pending a

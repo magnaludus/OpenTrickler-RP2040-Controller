@@ -204,6 +204,20 @@
                                     <span class="label-text">Target Success (%)</span>
                                     <input type="number" class="input input-bordered" name="l8" step="1" min="50" max="100">
                                 </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Bulk Safety Factor</span>
+                                    <input type="number" class="input input-bordered" name="l9" step="0.1" min="1" max="5">
+                                </div>
+                            </div>
+                            <div class="text-sm opacity-70 mt-2">
+                                Learn hands the bulk (coarse) tube as much of the charge as it can and stops it as
+                                late as it dares. Two settings hold it back. <b>Time Goal</b> is the trade: the fit
+                                spends every second under it buying a closer handoff, so a lower goal gives a faster
+                                throw and a wider handoff, a higher goal a slower throw and a tighter one.
+                                <b>Bulk Safety Factor</b> is the margin: the handoff always covers this many times
+                                the coarse tube's own measured 3 sigma stop scatter, so 1.0 is bare 3 sigma and
+                                higher backs the handoff off. Raise it if you see overthrows. The fitted result
+                                lands in Coarse Stop Threshold on the Charge Mode page and stays editable there.
                             </div>
                             <button class="btn btn-neutral settings-apply-btn">Apply</button>
                         </form>

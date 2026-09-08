@@ -79,7 +79,7 @@ typedef struct {
     bool confirm_met;
 } learn_result_t;
 
-#define EEPROM_LEARN_CONFIG_REV     2
+#define EEPROM_LEARN_CONFIG_REV     3
 #define LEARN_MAX_CONFIRM_ROUNDS    3
 
 typedef struct {
@@ -95,6 +95,12 @@ typedef struct {
     float time_goal_s;              // upper limit on throw time at the confirm weight, default 8.5
     float cup_capacity_gr;          // powder the cup can hold before it has to be dumped, default 250
     float min_success_pct;          // confirmation has to hit this or the profile backs off and reruns, default 95
+
+    // How much cushion the fitted coarse handoff carries over the coarse tube's own measured stop
+    // scatter, as a multiple of that 3 sigma figure. The fit hands the bulk as much of the charge as
+    // it can and this is what holds it back, so it is the dial between a tight handoff and margin
+    // against an overthrow. 1.0 = bare 3 sigma, 1.5 = default, higher = more conservative.
+    float coarse_stop_safety;
 } learn_config_t;
 
 typedef struct {

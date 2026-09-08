@@ -58,9 +58,12 @@ static const learn_config_t default_learn_config = {
     .fine_speed_ceiling = 4.0f,
     .confirm_target = 42.5f,
     .confirm_throws = LEARN_CONFIRM_THROWS,
-    .time_goal_s = 8.5f,
+    // The fit spends every second under this goal buying a tighter handoff, so the goal is the dial
+    // between a fast throw and a bulk that gets closer before handing over.
+    .time_goal_s = 7.0f,
     .cup_capacity_gr = 250.0f,
     .min_success_pct = 95.0f,
+    .coarse_stop_safety = 1.5f,
 };
 
 // Largest settled throw seen on each tube this run, used to size the cup check
@@ -77,7 +80,8 @@ static float max_settled_fine = 0.0f;
 #define LEARN_PREDICT_STOP_MARGIN_GR    0.30f
 #define LEARN_COARSE_FLOW_CAP_GPS       18.0f   // no point characterising a bulk rate faster than this
 #define LEARN_COARSE_EXTRAP_MULT        1.25f   // fit may pick a coarse speed at most this far past the ladder
-#define LEARN_COARSE_STOP_SAFETY        1.5f    // handoff carries this x the 3 sigma coarse stop scatter
+#define LEARN_COARSE_STOP_SAFETY_MIN    1.0f    // bare 3 sigma, no cushion
+#define LEARN_COARSE_STOP_SAFETY_MAX    5.0f
 #define LEARN_COARSE_MIN_RUN_S          1.20f   // has to run well past the lag or the numbers mean nothing
 #define LEARN_COARSE_MAX_RUN_S          4.00f
 #define LEARN_FINE_MIN_RUN_S            3.00f
@@ -534,7 +538,9 @@ static void fit_profile(void) {
     // covers 3 sigma of stop scatter and the factor buys a cushion on top of a session's worth of
     // measurements. With prediction off it already has to swallow the whole tail at 3x, so stacking
     // the factor there would just make an uncompensated profile needlessly slow.
-    float coarse_margin_mult = r->predict_used ? LEARN_COARSE_STOP_SAFETY : 1.0f;
+    float coarse_margin_mult = r->predict_used ? learn_mode.config.coarse_stop_safety : 1.0f;
+    if (coarse_margin_mult < LEARN_COARSE_STOP_SAFETY_MIN) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MIN;
+    if (coarse_margin_mult > LEARN_COARSE_STOP_SAFETY_MAX) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MAX;
 
     float c_motor_min = fmaxf(get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR), 0.05f);
     float f_motor_min = fmaxf(get_motor_min_speed(SELECT_FINE_TRICKLER_MOTOR), 0.05f);
@@ -570,12 +576,20 @@ static void fit_profile(void) {
     // the taper window scales with fine flow, so the fine phase takes about the same number of
     // seconds at any fine speed (taper / mean taper rate ~ 6 x lag either way) while the handoff it
     // forces grows in proportion. Sweeping fine max alongside coarse max lets the fit spend fine
-    // speed only where it actually buys bulk rate. Every point on the grid carries the same margin -
-    // the handoff covers LEARN_COARSE_STOP_SAFETY x the 3 sigma coarse stop scatter at that bulk
-    // rate - so with safety held equal the fastest predicted throw wins.
+    // speed only where it actually buys bulk rate.
+    //
+    // Every point on the grid already carries the same margin - the handoff covers the configured
+    // safety factor x the 3 sigma coarse stop scatter at that bulk rate - so the goal is to hand the
+    // bulk as much of the charge as it can, i.e. the smallest handoff, and the time goal is what
+    // holds that back. Take the tightest handoff that still makes the goal, fastest on a tie. Only
+    // if nothing makes the goal does the fastest throw win instead.
     float best_c = c_motor_min, best_f = fmin, best_handoff = 0.0f, best_taper = LEARN_FINE_TAPER_MIN_GR;
     float best_cs = 0.0f, best_fs = 0.0f, best_total = 1e9f;
     bool found = false;
+
+    // Fallback for when no combination meets the time goal: the fastest throw on the grid.
+    float fb_c = c_motor_min, fb_f = fmin, fb_handoff = 0.0f, fb_taper = LEARN_FINE_TAPER_MIN_GR;
+    float fb_cs = 0.0f, fb_fs = 0.0f, fb_total = 1e9f;
 
     for (int fi = 1; fi <= LEARN_SEARCH_STEPS; fi += 1) {
         float fmax = f_hi * (float) fi / (float) LEARN_SEARCH_STEPS;
@@ -604,11 +618,22 @@ static void fit_profile(void) {
             predict_throw(target, coarse_flow, fine_flow_max, fine_flow_min, handoff, taper, &cs, &fs);
             float total = cs + fs;
 
-            if (total < best_total) {
+            if (total <= goal &&
+                (!found || handoff < best_handoff - 0.001f ||
+                 (handoff < best_handoff + 0.001f && total < best_total))) {
+                found = true;
                 best_c = cmax; best_f = fmax; best_handoff = handoff; best_taper = taper;
                 best_cs = cs; best_fs = fs; best_total = total;
             }
+            if (total < fb_total) {
+                fb_c = cmax; fb_f = fmax; fb_handoff = handoff; fb_taper = taper;
+                fb_cs = cs; fb_fs = fs; fb_total = total;
+            }
         }
+    }
+    if (!found) {
+        best_c = fb_c; best_f = fb_f; best_handoff = fb_handoff; best_taper = fb_taper;
+        best_cs = fb_cs; best_fs = fb_fs; best_total = fb_total;
     }
     if (best_total >= 1e9f) {
         // Nothing on the grid was usable - every handoff the margins demanded was more than half the
@@ -994,6 +1019,10 @@ bool learn_mode_init(void) {
     if (learn_mode.config.coarse_target <= 0.0f) learn_mode.config.coarse_target = default_learn_config.coarse_target;
     if (learn_mode.config.fine_target <= 0.0f) learn_mode.config.fine_target = default_learn_config.fine_target;
     if (learn_mode.config.min_success_pct < 50.0f || learn_mode.config.min_success_pct > 100.0f) learn_mode.config.min_success_pct = default_learn_config.min_success_pct;
+    if (learn_mode.config.coarse_stop_safety < LEARN_COARSE_STOP_SAFETY_MIN ||
+        learn_mode.config.coarse_stop_safety > LEARN_COARSE_STOP_SAFETY_MAX) {
+        learn_mode.config.coarse_stop_safety = default_learn_config.coarse_stop_safety;
+    }
 
     eeprom_register_handler(learn_mode_config_save);
     return true;
@@ -1012,6 +1041,8 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     // l5 (int): confirm throws
     // l6 (float): time goal s
     // l7 (float): cup capacity gr
+    // l8 (float): min success pct
+    // l9 (float): coarse stop safety factor
     // ee (bool): save to eeprom
     static char json_buffer[256];
     bool save_to_eeprom = false;
@@ -1026,23 +1057,29 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
         else if (strcmp(params[idx], "l6") == 0) learn_mode.config.time_goal_s = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l7") == 0) learn_mode.config.cup_capacity_gr = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l8") == 0) learn_mode.config.min_success_pct = strtof(values[idx], NULL);
+        else if (strcmp(params[idx], "l9") == 0) learn_mode.config.coarse_stop_safety = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "ee") == 0) save_to_eeprom = string_to_boolean(values[idx]);
-    }
-    if (save_to_eeprom) {
-        learn_mode_config_save();
     }
     if (learn_mode.config.time_goal_s < 1.0f) learn_mode.config.time_goal_s = 1.0f;
     if (learn_mode.config.cup_capacity_gr < 20.0f) learn_mode.config.cup_capacity_gr = 20.0f;
     if (learn_mode.config.min_success_pct < 50.0f) learn_mode.config.min_success_pct = 50.0f;
     if (learn_mode.config.min_success_pct > 100.0f) learn_mode.config.min_success_pct = 100.0f;
+    if (learn_mode.config.coarse_stop_safety < LEARN_COARSE_STOP_SAFETY_MIN) learn_mode.config.coarse_stop_safety = LEARN_COARSE_STOP_SAFETY_MIN;
+    if (learn_mode.config.coarse_stop_safety > LEARN_COARSE_STOP_SAFETY_MAX) learn_mode.config.coarse_stop_safety = LEARN_COARSE_STOP_SAFETY_MAX;
+
+    // Clamp before saving, so a bad value can't be written to EEPROM and reloaded next boot
+    if (save_to_eeprom) {
+        learn_mode_config_save();
+    }
 
     snprintf(json_buffer, sizeof(json_buffer),
-             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f}",
+             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f,\"l9\":%.2f}",
              http_json_header,
              learn_mode.config.coarse_target, learn_mode.config.fine_target,
              learn_mode.config.coarse_speed_ceiling, learn_mode.config.fine_speed_ceiling,
              learn_mode.config.confirm_target, (int) learn_mode.config.confirm_throws,
-             learn_mode.config.time_goal_s, learn_mode.config.cup_capacity_gr, learn_mode.config.min_success_pct);
+             learn_mode.config.time_goal_s, learn_mode.config.cup_capacity_gr,
+             learn_mode.config.min_success_pct, learn_mode.config.coarse_stop_safety);
 
     size_t len = strlen(json_buffer);
     file->data = json_buffer; file->len = len; file->index = len;
