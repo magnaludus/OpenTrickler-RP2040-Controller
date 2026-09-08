@@ -439,32 +439,43 @@ static float fit_flow_per_rps(const learn_throw_t * throws, int count) {
 }
 
 
-// Mean and SD of the per throw lag across both phases
-static void lag_stats(float * mean_out, float * sd_out, float * coarse_out, float * fine_out, float * dead_out) {
-    double sum = 0.0, sum_sq = 0.0, c_sum = 0.0, f_sum = 0.0, d_sum = 0.0;
+// Sample standard deviation from running sums. Returns 0 for n < 2.
+static float sample_sd(double sum, double sum_sq, int n) {
+    if (n < 2) return 0.0f;
+    double mean = sum / n;
+    double var = (sum_sq - n * mean * mean) / (n - 1);
+    return (var > 0.0) ? (float) sqrt(var) : 0.0f;
+}
+
+
+// Mean and SD of the per throw lag, both combined and per phase. Coarse and fine consistently
+// measure different lag, so a combined SD is inflated by the gap between their means, not just
+// noise - that pooled number is only for display. Anything driving a safety margin must use the
+// per-phase SD instead, or a fresh, consistent tube reads as if it were a noisy one.
+static void lag_stats(float * mean_out, float * sd_out, float * coarse_out, float * fine_out,
+                      float * coarse_sd_out, float * fine_sd_out, float * dead_out) {
+    double sum = 0.0, sum_sq = 0.0;
+    double c_sum = 0.0, c_sum_sq = 0.0, f_sum = 0.0, f_sum_sq = 0.0, d_sum = 0.0;
     int n = 0, c_n = 0, f_n = 0, d_n = 0;
     for (int phase = 0; phase < 2; phase += 1) {
         const learn_throw_t * t = (phase == 0) ? learn_mode.coarse : learn_mode.fine;
         for (int i = 0; i < LEARN_THROWS_PER_PHASE; i += 1) {
             if (t[i].lag_s <= 0.0f) continue;
-            sum += t[i].lag_s;
-            sum_sq += (double) t[i].lag_s * t[i].lag_s;
+            double v = (double) t[i].lag_s;
+            sum += v;
+            sum_sq += v * v;
             n += 1;
-            if (phase == 0) { c_sum += t[i].lag_s; c_n += 1; } else { f_sum += t[i].lag_s; f_n += 1; }
+            if (phase == 0) { c_sum += v; c_sum_sq += v * v; c_n += 1; }
+            else { f_sum += v; f_sum_sq += v * v; f_n += 1; }
             if (t[i].dead_time_s > 0.0f) { d_sum += t[i].dead_time_s; d_n += 1; }
         }
     }
     *mean_out = (n > 0) ? (float)(sum / n) : 0.0f;
-    if (n > 1) {
-        double mean = sum / n;
-        double var = (sum_sq - n * mean * mean) / (n - 1);
-        *sd_out = (var > 0.0) ? (float) sqrt(var) : 0.0f;
-    }
-    else {
-        *sd_out = 0.0f;
-    }
+    *sd_out = sample_sd(sum, sum_sq, n);
     *coarse_out = (c_n > 0) ? (float)(c_sum / c_n) : 0.0f;
     *fine_out = (f_n > 0) ? (float)(f_sum / f_n) : 0.0f;
+    *coarse_sd_out = sample_sd(c_sum, c_sum_sq, c_n);
+    *fine_sd_out = sample_sd(f_sum, f_sum_sq, f_n);
     *dead_out = (d_n > 0) ? (float)(d_sum / d_n) : 0.0f;
 }
 
@@ -500,8 +511,8 @@ static void fit_profile(void) {
     r->coarse_k = fit_flow_per_rps(learn_mode.coarse, LEARN_THROWS_PER_PHASE);
     r->fine_k = fit_flow_per_rps(learn_mode.fine, LEARN_THROWS_PER_PHASE);
 
-    float lag_mean, lag_sd, dead;
-    lag_stats(&lag_mean, &lag_sd, &r->coarse_lag_s, &r->fine_lag_s, &dead);
+    float lag_mean, lag_sd, coarse_lag_sd, fine_lag_sd, dead;
+    lag_stats(&lag_mean, &lag_sd, &r->coarse_lag_s, &r->fine_lag_s, &coarse_lag_sd, &fine_lag_sd, &dead);
     r->lag_sd_s = lag_sd;
     r->dead_time_s = dead;
     r->lag_used_s = fminf(3.0f, fmaxf(0.0f, lag_mean));
@@ -510,9 +521,12 @@ static void fit_profile(void) {
     r->fine_tail_per_rps = r->lag_used_s * r->fine_k;
 
     // With compensation on, the handoff only has to cover the error in the prediction, not the whole
-    // tail. That error is the flow multiplied by how much the lag itself varies. Without compensation
-    // the handoff has to swallow the entire tail, which is why it gets big and slow.
-    float lag_err = r->predict_used ? fmaxf(lag_sd, 0.02f) : fmaxf(r->lag_used_s, 0.05f);
+    // tail. That error is the flow multiplied by how much the lag itself varies - each phase by its
+    // own measured spread, not the combined figure (pooling coarse and fine's different mean lag
+    // inflates that number well past either phase's real noise). Without compensation the handoff
+    // has to swallow the entire tail, which is why it gets big and slow.
+    float coarse_lag_err = r->predict_used ? fmaxf(coarse_lag_sd, 0.02f) : fmaxf(r->coarse_lag_s, 0.05f);
+    float fine_lag_err = r->predict_used ? fmaxf(fine_lag_sd, 0.02f) : fmaxf(r->fine_lag_s, 0.05f);
 
     float c_motor_min = fmaxf(get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR), 0.05f);
     float f_motor_min = fmaxf(get_motor_min_speed(SELECT_FINE_TRICKLER_MOTOR), 0.05f);
@@ -523,7 +537,7 @@ static void fit_profile(void) {
     // in the air at the very end fits well inside the bracket.
     float fmin_land = (r->fine_k > 0.0f) ? LEARN_FINE_LAND_FLOW_GPS / r->fine_k : f_motor_min;
     float land_budget = LEARN_BRACKET_USE_FRAC * bracket;
-    float fmin_err = (r->fine_k > 0.0f && lag_err > 0.0f) ? land_budget / (r->fine_k * lag_err) : fmin_land;
+    float fmin_err = (r->fine_k > 0.0f && fine_lag_err > 0.0f) ? land_budget / (r->fine_k * fine_lag_err) : fmin_land;
     float fmin = fminf(fmin_land, fmin_err);
     if (fmin < f_motor_min) fmin = f_motor_min;
     if (fmin > f_hi) fmin = f_hi;
@@ -554,7 +568,7 @@ static void fit_profile(void) {
         float coarse_flow = r->coarse_k * cmax;
 
         // Handoff has to cover prediction error at this bulk speed, and leave the fine real work to do
-        float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR, 3.0f * coarse_flow * lag_err + LEARN_COARSE_STOP_MARGIN_GR);
+        float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR, 3.0f * coarse_flow * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
         if (handoff < taper * 1.5f) handoff = taper * 1.5f;
         if (handoff >= 0.5f * target) continue;      // bulk has to carry at least half the charge
 
@@ -576,9 +590,9 @@ static void fit_profile(void) {
     r->coarse_min_rps = fminf(c_motor_min, best_c);
     r->coarse_stop_threshold = best_handoff;
     r->coarse_tail_at_max = r->lag_used_s * r->coarse_k * best_c;
-    r->coarse_tail_sd_at_max = lag_sd * r->coarse_k * best_c;
+    r->coarse_tail_sd_at_max = coarse_lag_sd * r->coarse_k * best_c;
     r->fine_tail_at_max = r->lag_used_s * fine_flow_max;
-    r->fine_tail_sd_at_max = lag_sd * fine_flow_max;
+    r->fine_tail_sd_at_max = fine_lag_sd * fine_flow_max;
 
     // Hold full coarse speed until the last half grain before the handoff
     r->coarse_kp = r->coarse_max_rps / 0.5f;

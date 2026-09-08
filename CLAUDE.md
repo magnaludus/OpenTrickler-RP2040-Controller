@@ -159,6 +159,41 @@ on the trickler page now shows both phases (s11 coarse / s14 fine), Learn
 results panel's "Lag compensation" line shows both instead of the blended
 value.
 
+## Handoff was stuck too wide: pooled-variance bug, not a tuning limit
+
+After the overcharge fix, the user reported the coarse handoff was still
+5-8gr (expected more like 2-2.5gr, maybe 1-1.5gr) and that live tuning
+wasn't closing the gap - the new safety floor (`coarse_tail_sd_gr`) had
+made it *worse* than before the fix, not better.
+
+Root cause: `lag_stats()` computed **one** standard deviation pooled across
+both coarse and fine throws. Coarse and fine consistently measure
+different mean lag (~0.53s vs ~0.70s), so pooling them inflates the
+apparent spread by the *gap between the means*, not just real noise.
+Computed from actual Learn data: coarse's true per-phase SD is **~0.019s**
+(right at the numeric floor - genuinely rock-solid), while the old pooled
+figure was **~0.16-0.19s**, ~9x larger. Both the original static fit's
+handoff formula and the new live-tuning safety floor were built on that
+inflated pooled number, so the coarse handoff was landing around 5gr from
+day one (not just after the recent floor), and the floor then locked that
+inflated value in as a hard minimum.
+
+Fix (not removing the floor - correcting what feeds it): `lag_stats()` now
+also returns per-phase SD; `fit_profile()` uses `coarse_lag_err`/
+`fine_lag_err` from each phase's own SD instead of one blended `lag_err`,
+for the coarse handoff formula, the fine landing-speed error budget, and
+both `coarse_tail_sd_at_max`/`fine_tail_sd_at_max` (which feeds the live
+floor via `coarse_tail_sd_gr`). Expected effect: the coarse-variance term
+in the handoff formula drops close to its own floor, so the **taper x 1.5**
+floor (a real, unrelated physical constraint - the fine ramp needs that
+much room) becomes the binding constraint instead, landing handoff in the
+~3-4gr range rather than ~5-6gr, with live tuning now free to actually
+narrow it further from there instead of hitting an inflated wall
+immediately.
+
+Needs a fresh Learn Powder run to take effect (old profiles keep whatever
+handoff they already have baked in).
+
 ## Where we left off
 
 Two real, data-backed threads open, both flagged not implemented pending a
