@@ -311,6 +311,50 @@ Also fixed while in `http_rest_learn_config`: the range clamps ran *after*
 the EEPROM save, so an out-of-range value could be written and reloaded on
 the next boot. Clamps now run first.
 
+## Stale live-tuning baseline (serious), and confirm-throw suppression
+
+Found while answering "should per-throw tuning be suppressed during Learn's
+confirm throws?" - it should, but chasing it turned up a worse bug next to
+it.
+
+`learn_post_throw()` bounds every adjustment to 50-140% of a baseline
+captured on the **first throw after boot** and never refreshed. Nothing
+else that writes the profile - `learn_mode_apply_to_profile()`, a portal
+edit - told it to re-take that baseline. So the window stayed anchored to
+whatever was loaded at power-on, and because `learn_bound()` clamps *into*
+the window from both sides, an out-of-date baseline doesn't merely loosen
+the guard rails, it actively drags the profile back toward the values that
+were just replaced.
+
+Worked through with the user's real numbers - boot on the old profile
+(handoff 5.258gr, coarse max 0.83rps), run Learn, fit applies 1.61gr /
+2.10rps. Bound window is still 2.63-7.36gr and 0.41-1.16rps, so:
+
+- five **clean** throws want to tighten the handoff to 1.53gr and instead
+  get 2.63gr - the reward for a clean streak was a *wider* handoff
+- one **over** wants coarse max at 1.93rps (a 8% trim) and gets 1.16rps,
+  a 45% cut
+
+So a fresh fit got pulled apart by the first adjustment after it. This is
+almost certainly part of what the user was seeing as "it isn't learning",
+and it applies to manual portal edits too, not just Learn.
+
+Fix is self-healing rather than a set of hooks: `learn_state_t` now also
+stores the values the tuner itself last left behind (`seen_*`). If the
+profile or the handoff differs from those at the top of the next throw,
+something else moved it, so the baseline is re-taken from the current
+values and the clean streak resets (throws that ran clean on a different
+profile vouch for nothing). Covers Learn applying a fit, back-off rounds,
+portal edits and profile reloads without any cross-module calls.
+
+Separately, per-throw tuning is now suppressed during Learn's confirm set
+(`charge_mode_learn_set_suppressed()`, held for the whole confirm loop
+including back-off rounds). Confirmation is a *measurement* of the fitted
+profile: tuning it mid-set means the pass rate that decides whether to back
+off describes a profile that moved while being measured, and on a passing
+round the saved profile silently differs from what the results screen
+reports. `learn_mode_menu()` has a single return, so the flag cannot leak.
+
 ## Where we left off
 
 Two real, data-backed threads open, both flagged not implemented pending a

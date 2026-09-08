@@ -106,6 +106,7 @@ void charge_mode_toggle_bracket_mode(void);
 const char * charge_mode_bracket_mode_name(void);
 float charge_mode_get_last_elapsed_seconds(void);
 float charge_mode_get_measured_lag(void);       // lag from the last throw, 0 if not measurable
+void charge_mode_learn_set_suppressed(bool suppressed);  // pause per-throw tuning (Learn's confirm set)
 float charge_mode_get_dead_time(void);          // motor start to first movement on the scale, last throw
 
 // REST interface

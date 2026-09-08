@@ -146,10 +146,28 @@ typedef struct {
     float base_fine_kp;
     float base_coarse_max;
     float base_handoff;
+    // What this tuner left behind last time. Anything else moving these - a Learn Powder fit being
+    // applied, an edit from the portal - shows up as a mismatch and re-takes the baseline. Without
+    // that, the window stays anchored to whatever was loaded at boot, so the first adjustment after
+    // a new fit drags the profile back toward the values that fit just replaced.
+    float seen_fine_max;
+    float seen_fine_min;
+    float seen_fine_kp;
+    float seen_coarse_max;
+    float seen_handoff;
     uint8_t clean_streak;       // consecutive passes with no over
 } learn_state_t;
 
 static learn_state_t learn_state[MAX_PROFILE_CNT];
+
+// Learn Powder's confirmation throws measure the fitted profile. Tuning it while it is being
+// measured means the pass rate no longer describes the profile the fit produced, and the profile
+// that ends up saved is not the one on the results screen.
+static bool learn_tuning_suppressed = false;
+
+void charge_mode_learn_set_suppressed(bool suppressed) {
+    learn_tuning_suppressed = suppressed;
+}
 
 #define LEARN_UP_LIMIT      1.40f
 #define LEARN_DOWN_LIMIT    0.50f
@@ -171,6 +189,9 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     if (!charge_mode_config.eeprom_charge_mode_data.learn_enable) {
         return;
     }
+    if (learn_tuning_suppressed) {
+        return;
+    }
     if (profile_idx >= MAX_PROFILE_CNT) {
         return;
     }
@@ -179,13 +200,25 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     learn_state_t * st = &learn_state[profile_idx];
     float handoff = charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold;
 
-    if (!st->has_baseline) {
+    // Re-take the baseline if the profile moved under us since the last throw. The bounds below are
+    // relative to it, so an out of date baseline doesn't just loosen the guard rails, it actively
+    // pulls the profile back toward the superseded values - a fresh Learn fit would get dragged
+    // toward the profile it replaced on the very first adjustment.
+    bool moved_elsewhere = st->has_baseline &&
+        (fabsf(profile->fine_max_flow_speed_rps - st->seen_fine_max) > 1e-4f ||
+         fabsf(profile->fine_min_flow_speed_rps - st->seen_fine_min) > 1e-4f ||
+         fabsf(profile->fine_kp - st->seen_fine_kp) > 1e-4f ||
+         fabsf(profile->coarse_max_flow_speed_rps - st->seen_coarse_max) > 1e-4f ||
+         fabsf(handoff - st->seen_handoff) > 1e-4f);
+
+    if (!st->has_baseline || moved_elsewhere) {
         st->has_baseline = true;
         st->base_fine_max = profile->fine_max_flow_speed_rps;
         st->base_fine_min = profile->fine_min_flow_speed_rps;
         st->base_fine_kp = profile->fine_kp;
         st->base_coarse_max = profile->coarse_max_flow_speed_rps;
         st->base_handoff = handoff;
+        // Whatever ran clean before was a different profile, so it vouches for nothing here.
         st->clean_streak = 0;
     }
 
@@ -268,6 +301,14 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     if (charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold < 0.30f) {
         charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = 0.30f;
     }
+
+    // Remember the values as they stand now, after every clamp. Next throw compares against these to
+    // tell its own edits apart from someone else's.
+    st->seen_fine_max = profile->fine_max_flow_speed_rps;
+    st->seen_fine_min = profile->fine_min_flow_speed_rps;
+    st->seen_fine_kp = profile->fine_kp;
+    st->seen_coarse_max = profile->coarse_max_flow_speed_rps;
+    st->seen_handoff = charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold;
 }
 
 // Coarse trickler end-of-trickle backoff

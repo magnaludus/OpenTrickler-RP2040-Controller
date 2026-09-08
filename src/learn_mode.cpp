@@ -932,6 +932,11 @@ uint8_t learn_mode_menu(void) {
     }
     learn_mode.result.confirm_rounds = 0;
     learn_mode.result.confirm_met = false;
+    // Confirmation measures the fitted profile, so hold the per-throw tuner off for the duration.
+    // Otherwise the pass rate that decides whether to back off describes a profile that moved while
+    // it was being measured, and what gets saved is not what the results screen reports. Real tuning
+    // starts once the user is charging for effect.
+    charge_mode_learn_set_suppressed(true);
     while (ok && learn_mode.result.confirm_rounds < LEARN_MAX_CONFIRM_ROUNDS) {
         learn_mode.result.confirm_rounds += 1;
         ok = confirm_throws();
@@ -949,6 +954,7 @@ uint8_t learn_mode_menu(void) {
             vTaskDelay(pdMS_TO_TICKS(800));
         }
     }
+    charge_mode_learn_set_suppressed(false);
 
     motor_set_speed(SELECT_COARSE_TRICKLER_MOTOR, 0);
     motor_set_speed(SELECT_FINE_TRICKLER_MOTOR, 0);
