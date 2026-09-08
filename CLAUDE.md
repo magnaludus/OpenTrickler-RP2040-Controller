@@ -311,6 +311,59 @@ Also fixed while in `http_rest_learn_config`: the range clamps ran *after*
 the EEPROM save, so an out-of-range value could be written and reloaded on
 the next boot. Clamps now run first.
 
+## Predicted throw time was ~2x optimistic: the taper is exponential
+
+User reported Learn predicting 5-6s against a real 10-12s. This stopped
+being cosmetic the moment the time goal became the dial that sets the
+handoff - the dial was calibrated against a fiction.
+
+Validated against a fresh Learn run the user posted (portal screenshot,
+their own hardware): `coarse_k` 10.773, `fine_k` 0.3104, coarse lag 0.52s,
+fine lag 0.76s, dead time 0.86s, fine max/min 4.00/0.19 rps, `fine_kp`
+1.421, taper 2.815gr, handoff 2.815gr. Portal said **predicted 5.8s
+(coarse 1.0, fine 4.8)**; the confirm set ran **10/10 pass, avg 11.8s**.
+
+Root cause: `predict_throw()` modelled the taper as a linear ramp and
+divided the window by the *arithmetic mean* of the two ramp endpoints. But
+the controller sets `speed = fine_kp x error`, so the approach is
+**exponential** - the tube spends most of the window crawling near its
+landing speed. Analytically:
+
+    taper traverse = tau x (ln(fmax/fmin) + 1),  tau = taper / flow at fine max
+
+and since `taper = LEARN_FINE_TAPER_TAIL_MULT x fine_lag x flow at fine
+max`, tau reduces to `3 x fine_lag` - so **fine-phase time is set by the
+fmax/fmin ratio and the tube's lag, not by how fast the tube is run.**
+
+On the user's numbers: linear model 4.33s, exponential 9.18s (2.1x). Add
+the 0.86s dead time, which was not modelled at all, and predicted total
+goes 5.81s -> **11.52s against an actual 11.8s**. The old figure of 5.81s
+reproduces the portal's 5.8s exactly, so the diagnosis is confirmed both
+ways.
+
+Second finding from the same formula: the landing speed was pinned at
+`fmin_land` (LEARN_FINE_LAND_FLOW_GPS / fine_k = 0.19 rps, the "couple of
+kernels a second" heuristic) giving an fmax/fmin ratio of 21 and over 9
+seconds of trickling - while `fmin_err`, the bracket arithmetic, said 0.77
+rps would still settle inside the bracket. That is a 4x lever on the
+dominant term, left unused. The fit now sweeps the landing speed
+(`LEARN_LAND_STEPS`, slowest first) from `fmin_land` up to `fmin_err`,
+preferring the slowest that meets the goal; `fmin_err` remains a hard
+accuracy ceiling that is never exceeded.
+
+Objective tie-break is now: tightest handoff, then *slowest* landing (the
+extra speed was not needed), then fastest.
+
+Replayed on the user's own constants at a 26gr charge, the fixed model
+gives handoff 1.33gr with fine max 1.67 / fine min 0.77 and an honest
+7.50s - against 2.815gr and a real 11.8s today. The fine phase drops from
+~9.2s to ~4.3s almost entirely by landing four times faster.
+
+Note the 7.0s default goal is now *not* reachable on this hardware (best
+is ~7.5s), so `meets_time_goal` reports false and the fit falls back to
+fastest. That is honest rather than broken - raising the goal to 8s makes
+the tightest-handoff objective engage again and yields 0.82gr at 7.84s.
+
 ## Stale live-tuning baseline (serious), and confirm-throw suppression
 
 Found while answering "should per-throw tuning be suppressed during Learn's
