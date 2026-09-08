@@ -231,12 +231,16 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
             }
             else {
                 // Narrow the handoff first, it is cheaper than running the fine tube harder.
-                // Floored by the coarse tube's own measured spread from the Learn fit (3 sigma,
-                // same margin convention the initial fit uses) so a run of clean throws can't
-                // ratchet the margin down past what the coarse tube's natural variance needs -
-                // a streak of 5 is not proof the setting is safe, just that it hasn't failed yet.
+                // Floored by the coarse tube's own measured spread from the Learn fit (3 sigma) so a
+                // run of clean throws can't ratchet the margin down past what the coarse tube's
+                // natural variance needs - a streak of 5 is not proof the setting is safe, just that
+                // it hasn't failed yet. Both floors sit deliberately below what the fit hands over:
+                // the fit sizes the handoff at LEARN_COARSE_STOP_SAFETY (1.5) x that 3 sigma and at
+                // a full taper width, so leaving live tuning the same two numbers would pin it at
+                // the fitted value and it could never tighten at all. Repeated clean throws are real
+                // evidence, so they may spend the fit's safety factor - but not the 3 sigma itself.
                 float sd_floor = 3.0f * charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr;
-                float tighter = fmaxf(handoff * 0.95f, fmaxf(taper * 1.5f, sd_floor));
+                float tighter = fmaxf(handoff * 0.95f, fmaxf(taper * 0.75f, sd_floor));
                 charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = learn_bound(tighter, st->base_handoff, 0.0f);
                 if (fine_s > 3.0f) {
                     float old_max = profile->fine_max_flow_speed_rps;

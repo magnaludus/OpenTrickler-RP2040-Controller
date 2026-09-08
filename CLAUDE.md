@@ -194,6 +194,87 @@ immediately.
 Needs a fresh Learn Powder run to take effect (old profiles keep whatever
 handoff they already have baked in).
 
+That prediction was only half right, and the follow-up review below found
+why: the pooled-SD fix did drop the handoff (4.56gr -> 3.63gr on the real
+Learn data) but `taper x 1.5` then became the binding floor at ~3.6gr, and
+the *taper itself* was the thing that needed fixing.
+
+## Handoff and speed, root-caused properly
+
+Re-derived from the raw Learn throws (`opentrickler_learn_throws_1.csv`,
+24 throws) rather than reasoned about in the abstract. Per-phase numbers:
+`coarse_k` 10.734 gr/s/rps, `fine_k` 0.3262 gr/s/rps, coarse lag
+**0.534s +/- 0.019s** and genuinely flat across all four speed levels
+(0.543 / 0.537 / 0.530 / 0.527); fine lag 0.704s +/- 0.201s, but that
+spread is a *speed dependence*, not noise (0.742s at 0.6rps, 0.885s at
+1.85rps, 0.485s at 3.9rps).
+
+Three findings, in order of how much they cost:
+
+1. **The fit never swept fine speed.** `fmax = f_hi` was hardcoded to the
+   ceiling. But the fine phase takes about the *same* time at any fine
+   speed: the taper scales with fine flow, so `taper / mean taper rate`
+   collapses to ~6 x lag and `(handoff - taper) / flow` to ~1.5 x lag,
+   both independent of speed. Running the fine tube flat out therefore
+   buys almost nothing in time while forcing a proportionally wider
+   handoff. Fixed by sweeping fine max alongside coarse max.
+
+2. **The taper used the pooled lag mean** (`lag_used_s`, 0.619s) for what
+   is purely a fine-phase quantity - it should use `fine_lag_s`. Same
+   class of bug as the pooled SD, one layer down.
+
+3. **The coarse sweep could pick a speed 3x outside its own data.** The
+   ladder deliberately stops at `LEARN_COARSE_FLOW_CAP_GPS` (18 gr/s,
+   ~1.68rps on this hardware) but the sweep ran to the motor limit of
+   5rps, extrapolating `coarse_k` far past anything measured. Now capped
+   at `LEARN_COARSE_EXTRAP_MULT` (1.25x) past the fastest ladder throw.
+
+Also: **live tuning could never tighten the handoff at all.** The fit set
+`handoff = taper * 1.5` and the live tuner floored tightening at
+`taper * 1.5` - the same number - so `learn_post_throw()`'s narrowing
+branch was a no-op from a fresh fit, which is exactly the "it isn't
+learning" the user reported. Live floors are now deliberately below what
+the fit hands over (`taper * 0.75` and a bare `3 x coarse_tail_sd_gr`,
+versus the fit's full taper and 1.5 x that 3 sigma), so repeated clean
+throws can spend the fit's safety factor but never the 3 sigma itself.
+
+New handoff rule: `max(0.30, 1.5 x 3 sigma coarse stop scatter + 0.15,
+taper)`, where the 1.5 (`LEARN_COARSE_STOP_SAFETY`) applies only when lag
+compensation is on - with it off the handoff already has to swallow the
+whole tail at 3x and stacking the factor would just make an uncompensated
+profile needlessly slow. Because every grid point then carries the same
+margin, the sweep picks the **fastest** predicted throw rather than the
+slowest coarse that scrapes the goal.
+
+Simulated against the real Learn data (all four charge weights the user
+runs, 26/30/40/42.5gr - the fit is target-independent here, numbers shown
+for 40gr):
+
+| | handoff | Cmax | Fmax | predicted |
+|---|---|---|---|---|
+| original | 4.56gr | 0.83 | 4.00 | 9.15s |
+| after pooled-SD fix | 3.63gr | 1.25 | 4.00 | 7.45s |
+| **after this fix** | **2.30gr** | 2.10 | 3.33 | **6.10s** |
+
+Handoff lands in the 2-2.5gr band the user asked for while getting
+*faster*, not slower - min-handoff and min-time turn out to point the same
+way once the formula is honest, because every grain handed to the slow
+fine tube costs ~0.8s at best. Cushion over the coarse tube's measured
+3 sigma scatter is 1.7x, and live tuning may narrow to 1.72gr (25% of
+headroom) on repeated clean throws.
+
+Also fixed: if no grid point was usable (every margin-driven handoff
+exceeded half the charge) `best_handoff` was left at 0.0, which would let
+the coarse tube run the whole way to target. Now falls back to the slowest
+bulk and the narrowest legal handoff. Latent in the original too.
+
+Not changed, deliberately: `fine_lag_s` is speed-dependent (0.485s at fine
+max, 0.885s mid-ramp) and `auto_lag_enable` re-learns it from the final
+settle, i.e. at landing speed. So the fine phase over-predicts early and
+the controller's `new_speed = 0` hold kicks in sooner than it needs to.
+That costs time, not accuracy, and the much smaller handoff shrinks the
+window where it matters. Flagged, not fixed - it needs its own data.
+
 ## Where we left off
 
 Two real, data-backed threads open, both flagged not implemented pending a
