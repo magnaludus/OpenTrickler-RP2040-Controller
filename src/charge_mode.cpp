@@ -139,6 +139,12 @@ static rgbw_u32_t session_backlight(void) {
 // Learn: bounded adaptive tuning of the selected profile after each throw.
 // Changes live in RAM. Save the profile from the portal to keep them.
 // ---------------------------------------------------------------------------
+#define LEARN_ERR_WINDOW    12      // throws of error history used to judge the real margin
+#define LEARN_ERR_MIN_N     8       // sample count before that judgement is worth acting on
+#define LEARN_LAND_STEP     1.15f   // most the landing speed may move in one adjustment
+
+extern "C" float learn_mode_get_land_sigma(void);
+
 typedef struct {
     bool has_baseline;
     float base_fine_max;
@@ -156,6 +162,12 @@ typedef struct {
     float seen_coarse_max;
     float seen_handoff;
     uint8_t clean_streak;       // consecutive passes with no over
+
+    // Recent throw errors, so tuning can work from the spread this profile actually produces
+    // rather than only from what the Learn fit predicted it would.
+    float err_window[LEARN_ERR_WINDOW];
+    uint8_t err_count;
+    uint8_t err_next;
 } learn_state_t;
 
 static learn_state_t learn_state[MAX_PROFILE_CNT];
@@ -185,7 +197,8 @@ static float learn_bound(float value, float base, float motor_cap) {
 // the bulk to the handoff, the fine runs full speed to the taper window then ramps to its landing
 // speed. Blame is assigned by where the throw actually went wrong, then the matching knob moves.
 static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float bracket,
-                             float total_s, float coarse_s, float coarse_stop_predicted) {
+                             float total_s, float coarse_s, float coarse_stop_predicted,
+                             float error_gr) {
     if (!charge_mode_config.eeprom_charge_mode_data.learn_enable) {
         return;
     }
@@ -220,7 +233,14 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
         st->base_handoff = handoff;
         // Whatever ran clean before was a different profile, so it vouches for nothing here.
         st->clean_streak = 0;
+        st->err_count = 0;
+        st->err_next = 0;
     }
+
+    // Record every throw, not just the clean ones - the spread has to include the misses.
+    st->err_window[st->err_next] = error_gr;
+    st->err_next = (uint8_t)((st->err_next + 1) % LEARN_ERR_WINDOW);
+    if (st->err_count < LEARN_ERR_WINDOW) st->err_count += 1;
 
     float fine_motor_cap = get_motor_max_speed(SELECT_FINE_TRICKLER_MOTOR);
     float coarse_motor_cap = get_motor_max_speed(SELECT_COARSE_TRICKLER_MOTOR);
@@ -259,6 +279,44 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
         // Five clean in a row: buy back some time from whichever phase is costing the most
         if (st->clean_streak >= 5) {
             st->clean_streak = 0;
+
+            // Landing speed, from measured evidence. The fine phase costs roughly
+            // 3 x fine_lag x (ln(fine max / fine min) + 1) seconds, so the landing speed is the
+            // dominant term in how long a throw takes - and until now tuning could only ever slow
+            // it down (x0.85 on an over) and never bring it back. That ratchets one way: every
+            // over cost time permanently and no amount of good behaviour bought it back.
+            //
+            // Landing error scales linearly with landing speed (halving the speed halved the
+            // measured spread exactly on tested hardware), so the adjustment is a direct ratio.
+            // The fit sizes this from the Learn run's lag spread, measured over a few throws at
+            // speeds the tube never lands at, and that runs conservative - asking for 2 sigma of
+            // margin produced 2.6 in practice. Real throws are the better evidence, so steer the
+            // landing speed until the observed margin matches what was actually asked for.
+            if (st->err_count >= LEARN_ERR_MIN_N && bracket > 0.0f) {
+                double sum = 0.0, sum_sq = 0.0;
+                for (uint8_t i = 0; i < st->err_count; i += 1) {
+                    double v = st->err_window[i];
+                    sum += v;
+                    sum_sq += v * v;
+                }
+                double mean = sum / st->err_count;
+                double var = (sum_sq - st->err_count * mean * mean) / (st->err_count - 1);
+                float sd = (var > 0.0) ? (float) sqrt(var) : 0.0f;
+
+                float target_sigma = learn_mode_get_land_sigma();
+                if (sd > 1e-4f && target_sigma > 0.0f) {
+                    float measured_sigma = bracket / sd;
+                    float ratio = measured_sigma / target_sigma;
+                    // Only act on a clear difference, and never more than one step at a time.
+                    if (ratio > 1.10f || ratio < 0.90f) {
+                        if (ratio > LEARN_LAND_STEP) ratio = LEARN_LAND_STEP;
+                        if (ratio < 1.0f / LEARN_LAND_STEP) ratio = 1.0f / LEARN_LAND_STEP;
+                        profile->fine_min_flow_speed_rps =
+                            learn_bound(profile->fine_min_flow_speed_rps * ratio, st->base_fine_min, 0.0f);
+                    }
+                }
+            }
+
             if (coarse_s >= fine_s) {
                 profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 1.06f, st->base_coarse_max, coarse_motor_cap);
             }
@@ -928,7 +986,8 @@ void charge_mode_wait_for_cup_removal() {
                              profile_idx,
                              charge_mode_config.eeprom_charge_mode_data.bracket_mode);
         learn_post_throw(profile_idx, throw_result, bracket,
-                         last_charge_elapsed_seconds, last_coarse_elapsed_seconds, last_coarse_stop_weight);
+                         last_charge_elapsed_seconds, last_coarse_elapsed_seconds, last_coarse_stop_weight,
+                         current_measurement - charge_mode_config.target_charge_weight);
     }
 
     // Stop condition: 5 stable measurements in 300ms apart (1.5 seconds minimum)

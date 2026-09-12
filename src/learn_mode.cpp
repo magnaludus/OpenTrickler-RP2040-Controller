@@ -1106,6 +1106,18 @@ uint8_t learn_mode_menu(void) {
 }
 
 
+// The margin the fit sized the landing speed for. Live tuning compares the error spread it
+// actually observes against this: the fit works from the Learn run's lag spread, which is measured
+// over a handful of throws at speeds the tube does not land at, so it comes out conservative.
+// Real throws are the better evidence.
+float learn_mode_get_land_sigma(void) {
+    float s = learn_mode.config.land_sigma;
+    if (s < LEARN_LAND_SIGMA_MIN) s = LEARN_LAND_SIGMA_MIN;
+    if (s > LEARN_LAND_SIGMA_MAX) s = LEARN_LAND_SIGMA_MAX;
+    return s;
+}
+
+
 bool learn_mode_config_save(void) {
     return save_config(EEPROM_LEARN_CONFIG_BASE_ADDR, &learn_mode.config, sizeof(learn_mode.config));
 }

@@ -373,6 +373,47 @@ is ~7.5s), so `meets_time_goal` reports false and the fit falls back to
 fastest. That is honest rather than broken - raising the goal to 8s makes
 the tightest-handoff objective engage again and yields 0.82gr at 7.84s.
 
+## Live tuning could only ever slow the landing down
+
+User, on v2.0: throws run over 10s where they used to be 8-9, and "it isn't
+learning to throw faster until it finds its optimal settings for speed and
+consistency".
+
+Two things, and the second is the real one.
+
+The 10s is expected: `land_sigma` 2.0 halves the landing speed against the old
+1 sigma behaviour, which is what bought 13/13 instead of 7/20. That trade was
+deliberate.
+
+But `learn_post_throw()` had **no way to raise `fine_min_flow_speed_rps`**. The
+only line touching it was `x 0.85` in the OVER branch - a one-way ratchet. Since
+fine-phase time is about `3 x fine_lag x (ln(fine max / fine min) + 1)`, the
+landing speed is the dominant term in throw time, so every over cost time
+permanently and no amount of good behaviour bought it back. The PASS branch
+could narrow the handoff and raise fine *max*, neither of which moves that term
+much.
+
+There was also unused headroom: the user asked for 2 sigma and measured **2.6**.
+The fit sizes the landing from the Learn run's lag spread, which is taken over a
+handful of throws at speeds the tube never lands at, so it comes out
+conservative. Real throws are better evidence.
+
+Fix: `learn_state_t` now keeps a `LEARN_ERR_WINDOW` (12) ring of recent throw
+errors - every throw, not just clean ones, so misses count. On the clean-streak
+trigger, with at least `LEARN_ERR_MIN_N` (8) samples, it compares the observed
+margin (`bracket / sd`) against `learn_mode_get_land_sigma()` and scales
+`fine_min` by that ratio, capped at `LEARN_LAND_STEP` (1.15x) per adjustment and
+still bounded by `learn_bound` to 50-140% of the fit. Landing error scales
+linearly with landing speed - halving it halved the measured spread exactly - so
+the ratio is a direct correction, and the loop is self-correcting: too fast
+raises sd, which lowers the margin, which pulls the speed back.
+
+Simulated on the user's constants, starting from the fitted fmin 0.41 at a
+measured 2.6 sigma with a 2.0 target: 0.41 -> 0.47 -> 0.53, settling in two
+adjustments (10 clean throws), fine phase 6.03s -> 5.48s, throw about
+9.1s -> 8.5s. It stops when observed margin matches the target rather than
+running until something breaks.
+
 ## Releases
 
 `git push` of a **tag** is refused with HTTP 403 in this environment (branches
