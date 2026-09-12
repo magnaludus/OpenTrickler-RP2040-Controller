@@ -1,0 +1,64 @@
+name: Release
+
+# Publishes a GitHub Release when a vX.Y tag is pushed.
+#
+# The tag has to be vX.Y exactly - scripts/gen_version.py matches
+# v<major>.<minor>-<commits>-g<hash> from `git describe --long`, so a three part
+# tag like v2.0.0 fails that match and the firmware reports its version as
+# "no-tag". fetch-depth: 0 is what makes the tag visible to git describe, which
+# is what bakes the real version into the build.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # tags must be present for gen_version.py
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi \
+                                  build-essential libstdc++-arm-none-eabi-newlib python3
+
+      - name: Build Pico 2 W
+        run: |
+          cmake -B build_pico2_w -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico2_w
+          cmake --build build_pico2_w --config Release
+
+      - name: Build Pico W
+        run: |
+          cmake -B build_pico_w -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=pico_w
+          cmake --build build_pico_w --config Release
+
+      - name: Collect artefacts
+        run: |
+          mkdir -p dist
+          cp build_pico2_w/app.uf2 "dist/opentrickler-${GITHUB_REF_NAME}-pico2_w.uf2"
+          cp build_pico_w/app.uf2  "dist/opentrickler-${GITHUB_REF_NAME}-pico_w.uf2"
+          echo "Built version string:"
+          cat build_pico2_w/../src/generated/version.c 2>/dev/null || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES=".github/release_notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            gh release create "$GITHUB_REF_NAME" dist/*.uf2 \
+              --title "$GITHUB_REF_NAME" --notes-file "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.uf2 \
+              --title "$GITHUB_REF_NAME" --generate-notes
+          fi
