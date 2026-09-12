@@ -79,7 +79,7 @@ typedef struct {
     bool confirm_met;
 } learn_result_t;
 
-#define EEPROM_LEARN_CONFIG_REV     3
+#define EEPROM_LEARN_CONFIG_REV     4
 #define LEARN_MAX_CONFIRM_ROUNDS    3
 
 typedef struct {
@@ -101,6 +101,12 @@ typedef struct {
     // it can and this is what holds it back, so it is the dial between a tight handoff and margin
     // against an overthrow. 1.0 = bare 3 sigma, 1.5 = default, higher = more conservative.
     float coarse_stop_safety;
+
+    // How many standard deviations of fine landing error have to fit inside the bracket, which is
+    // what caps the landing speed. The coarse side already works in 3 sigma; this started life as a
+    // bare 1 sigma, which let the fine tube land about three times too fast - roughly a third of
+    // throws fell outside the bracket by arithmetic alone. 2.0 is measured-good on tested hardware.
+    float land_sigma;
 } learn_config_t;
 
 typedef struct {

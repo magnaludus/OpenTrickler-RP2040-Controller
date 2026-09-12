@@ -68,7 +68,7 @@ const eeprom_charge_mode_data_t default_charge_mode_data = {
     .predict_enable = false,
     .coarse_lag_s = 0.35f,
     .fine_lag_s = 0.35f,
-    .auto_lag_enable = true,
+    .auto_lag_enable = false,
     .coarse_tail_sd_gr = 0.0f,
 };
 
@@ -835,11 +835,21 @@ void charge_mode_wait_for_cup_removal() {
             float measured = tail / rate_at_stop;
             if (measured < 5.0f) {
                 last_measured_lag = measured;
-                if (charge_mode_config.eeprom_charge_mode_data.auto_lag_enable) {
-                    // This measurement is taken at the throw's final settle, downstream of the
-                    // fine phase - it's a read on fine's lag, not coarse's. Only track fine_lag_s
-                    // here; coarse_lag_s only moves when Learn Powder is re-run, so it can't get
-                    // pulled toward fine's (measurably different) lag characteristic.
+                // Only meaningful with lag compensation OFF. With it on, the fine motor is
+                // stopped early on purpose - when predicted weight reaches target, not when the
+                // reading does - so by the time the loop exits, the motor has been off for a
+                // while and most of the tail has already landed. What is left is the residual
+                // *after* compensation did its job, not the transport lag. Feeding that back in
+                // makes the learned lag shrink, which weakens compensation, which shrinks it
+                // further: the better compensation works, the smaller the lag looks. On tested
+                // hardware it walked fine_lag_s from a fitted 0.70s down to 0.49s, which put
+                // +0.056gr of uncompensated powder into every charge - measured mean error was
+                // +0.060gr, and 13 of 20 throws went over with not one landing under.
+                if (charge_mode_config.eeprom_charge_mode_data.auto_lag_enable &&
+                    !charge_mode_config.eeprom_charge_mode_data.predict_enable) {
+                    // Taken at the throw's final settle, downstream of the fine phase, so it reads
+                    // fine's lag rather than coarse's. Only fine_lag_s tracks it; coarse_lag_s
+                    // moves only when Learn Powder is re-run.
                     // Slow tracking so one odd throw cannot move it far.
                     float current = charge_mode_config.eeprom_charge_mode_data.fine_lag_s;
                     float updated = 0.8f * current + 0.2f * measured;

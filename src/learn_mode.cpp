@@ -64,6 +64,7 @@ static const learn_config_t default_learn_config = {
     .cup_capacity_gr = 250.0f,
     .min_success_pct = 95.0f,
     .coarse_stop_safety = 1.5f,
+    .land_sigma = 2.0f,
 };
 
 // Largest settled throw seen on each tube this run, used to size the cup check
@@ -83,6 +84,8 @@ static float max_settled_fine = 0.0f;
 #define LEARN_COARSE_EXTRAP_MULT        1.25f   // fit may pick a coarse speed at most this far past the ladder
 #define LEARN_COARSE_STOP_SAFETY_MIN    1.0f    // bare 3 sigma, no cushion
 #define LEARN_COARSE_STOP_SAFETY_MAX    5.0f
+#define LEARN_LAND_SIGMA_MIN            1.0f
+#define LEARN_LAND_SIGMA_MAX            4.0f
 #define LEARN_COARSE_MIN_RUN_S          1.20f   // has to run well past the lag or the numbers mean nothing
 #define LEARN_COARSE_MAX_RUN_S          4.00f
 #define LEARN_FINE_MIN_RUN_S            3.00f
@@ -575,7 +578,14 @@ static void fit_profile(void) {
     // in the air at the very end fits well inside the bracket.
     float fmin_land = (r->fine_k > 0.0f) ? LEARN_FINE_LAND_FLOW_GPS / r->fine_k : f_motor_min;
     float land_budget = LEARN_BRACKET_USE_FRAC * bracket;
-    float fmin_err = (r->fine_k > 0.0f && fine_lag_err > 0.0f) ? land_budget / (r->fine_k * fine_lag_err) : fmin_land;
+    // The landing error is the landing flow multiplied by how much the lag varies, and it scales
+    // linearly with landing speed - halving the speed halves the spread, confirmed on hardware.
+    // land_sigma says how many of those sigmas have to fit in the budget.
+    float land_sigma = learn_mode.config.land_sigma;
+    if (land_sigma < LEARN_LAND_SIGMA_MIN) land_sigma = LEARN_LAND_SIGMA_MIN;
+    if (land_sigma > LEARN_LAND_SIGMA_MAX) land_sigma = LEARN_LAND_SIGMA_MAX;
+    float fmin_err = (r->fine_k > 0.0f && fine_lag_err > 0.0f)
+                     ? land_budget / (land_sigma * r->fine_k * fine_lag_err) : fmin_land;
 
     // The landing speed is the single biggest lever on how long the fine phase takes - the taper is
     // an exponential approach, so its length goes with ln(fine max / fine min). Landing at a couple
@@ -777,7 +787,9 @@ bool learn_mode_apply_to_profile(void) {
         charge_mode_config.eeprom_charge_mode_data.coarse_lag_s = r->coarse_lag_s;
         charge_mode_config.eeprom_charge_mode_data.fine_lag_s = r->fine_lag_s;
     }
-    charge_mode_config.eeprom_charge_mode_data.auto_lag_enable = true;
+    // Only track the lag live when prediction is off. With prediction on, the measurement is taken
+    // after the motor has already been stopped early, so it reads the residual rather than the lag.
+    charge_mode_config.eeprom_charge_mode_data.auto_lag_enable = !r->predict_used;
 
     // Floor for live per-throw tightening: it can narrow the handoff, but not past what the
     // coarse tube's own measured spread needs.
@@ -1085,6 +1097,10 @@ bool learn_mode_init(void) {
         learn_mode.config.coarse_stop_safety > LEARN_COARSE_STOP_SAFETY_MAX) {
         learn_mode.config.coarse_stop_safety = default_learn_config.coarse_stop_safety;
     }
+    if (learn_mode.config.land_sigma < LEARN_LAND_SIGMA_MIN ||
+        learn_mode.config.land_sigma > LEARN_LAND_SIGMA_MAX) {
+        learn_mode.config.land_sigma = default_learn_config.land_sigma;
+    }
 
     eeprom_register_handler(learn_mode_config_save);
     return true;
@@ -1105,6 +1121,7 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     // l7 (float): cup capacity gr
     // l8 (float): min success pct
     // l9 (float): coarse stop safety factor
+    // l10 (float): fine landing sigma
     // ee (bool): save to eeprom
     static char json_buffer[256];
     bool save_to_eeprom = false;
@@ -1120,6 +1137,7 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
         else if (strcmp(params[idx], "l7") == 0) learn_mode.config.cup_capacity_gr = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l8") == 0) learn_mode.config.min_success_pct = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l9") == 0) learn_mode.config.coarse_stop_safety = strtof(values[idx], NULL);
+        else if (strcmp(params[idx], "l10") == 0) learn_mode.config.land_sigma = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "ee") == 0) save_to_eeprom = string_to_boolean(values[idx]);
     }
     if (learn_mode.config.time_goal_s < 1.0f) learn_mode.config.time_goal_s = 1.0f;
@@ -1128,6 +1146,8 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     if (learn_mode.config.min_success_pct > 100.0f) learn_mode.config.min_success_pct = 100.0f;
     if (learn_mode.config.coarse_stop_safety < LEARN_COARSE_STOP_SAFETY_MIN) learn_mode.config.coarse_stop_safety = LEARN_COARSE_STOP_SAFETY_MIN;
     if (learn_mode.config.coarse_stop_safety > LEARN_COARSE_STOP_SAFETY_MAX) learn_mode.config.coarse_stop_safety = LEARN_COARSE_STOP_SAFETY_MAX;
+    if (learn_mode.config.land_sigma < LEARN_LAND_SIGMA_MIN) learn_mode.config.land_sigma = LEARN_LAND_SIGMA_MIN;
+    if (learn_mode.config.land_sigma > LEARN_LAND_SIGMA_MAX) learn_mode.config.land_sigma = LEARN_LAND_SIGMA_MAX;
 
     // Clamp before saving, so a bad value can't be written to EEPROM and reloaded next boot
     if (save_to_eeprom) {
@@ -1135,13 +1155,14 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     }
 
     snprintf(json_buffer, sizeof(json_buffer),
-             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f,\"l9\":%.2f}",
+             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f,\"l9\":%.2f,\"l10\":%.2f}",
              http_json_header,
              learn_mode.config.coarse_target, learn_mode.config.fine_target,
              learn_mode.config.coarse_speed_ceiling, learn_mode.config.fine_speed_ceiling,
              learn_mode.config.confirm_target, (int) learn_mode.config.confirm_throws,
              learn_mode.config.time_goal_s, learn_mode.config.cup_capacity_gr,
-             learn_mode.config.min_success_pct, learn_mode.config.coarse_stop_safety);
+             learn_mode.config.min_success_pct, learn_mode.config.coarse_stop_safety,
+             learn_mode.config.land_sigma);
 
     size_t len = strlen(json_buffer);
     file->data = json_buffer; file->len = len; file->index = len;

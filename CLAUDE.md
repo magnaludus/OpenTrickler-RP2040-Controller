@@ -364,6 +364,60 @@ is ~7.5s), so `meets_time_goal` reports false and the fit falls back to
 fastest. That is honest rather than broken - raising the goal to 8s makes
 the tightest-handoff objective engage again and yields 0.82gr at 7.84s.
 
+## Auto-lag ate its own correction; landing margin was 1 sigma
+
+Two faults, both found from one session CSV where the Learn confirm set went
+5/5 but normal charging went 13 over out of 20 with **zero** unders. Confirm
+suppresses per-throw tuning, so splitting the file on that boundary isolated
+them cleanly.
+
+**Auto-lag is a self-defeating feedback loop when prediction is on.** With lag
+compensation active the fine motor is stopped early by design - when *predicted*
+weight reaches target, not when the reading does. By the time the loop exits on
+the raw reading the motor has been off for a while and most of the tail has
+already landed, so what `auto_lag_enable` measures is the residual *after*
+compensation did its job, not transport lag. It learns that smaller number,
+compensates less, overshoots, and measures smaller still. The better
+compensation works, the smaller the lag looks; it settles roughly 0.2s below
+truth.
+
+Measured on hardware: fitted `fine_lag_s` 0.70s had walked to **0.49s**
+(portal showed `lag c0.53s/f0.49s (last 0.56)`). Landing flow was
+0.3248 x 0.82 = 0.2663 gr/s, so the 0.21s deficit put **+0.056gr** of
+uncompensated powder into every charge. Measured mean error: **+0.060gr**.
+
+Fixed by gating the update on `!predict_enable`, defaulting
+`auto_lag_enable` to false, and having `learn_mode_apply_to_profile()` set it
+to `!r->predict_used` instead of unconditionally true.
+
+**The landing margin was a 1 sigma budget** while the coarse side uses 3 sigma.
+`fmin_err` capped landing speed at the point where lag-prediction error fit in
+0.8 x bracket - as *one* sigma, so about a third of throws fall outside by
+arithmetic alone. Designed spread 0.048gr; measured sd 0.0465gr.
+
+Now `land_sigma` (learn config, REST `l10`, portal "Landing Sigma"), default
+**2.0**, clamped 1.0-4.0.
+
+Confirmed on hardware before committing - same session, settings changed by
+hand, no reflash:
+
+| | auto-lag on, fmin 0.82 | auto-lag off, lag 0.70, fmin 0.41 |
+|---|---|---|
+| pass | 7/20 (35%) | **13/13 (100%)** |
+| mean error | +0.0740gr | **-0.0151gr** |
+| sd | 0.0465gr | **0.0230gr** |
+| bracket margin | 1.3 sigma | **2.6 sigma** |
+| time | 8.32s | 9.97s |
+
+Halving the landing speed halved the spread exactly, which confirms landing
+error is linear in landing speed - the `fmin_err` formula was right, only its
+sigma was wrong. `land_sigma` 2.0 reproduces fmin 0.41 on these constants, so
+the default *is* the validated setting.
+
+`EEPROM_LEARN_CONFIG_REV` 3 -> 4 for the added field (Learn settings only).
+Lag settings also moved from Session & Bracket to the Charge Mode page, where
+a user reasonably expected to find them.
+
 ## Stale live-tuning baseline (serious), and confirm-throw suppression
 
 Found while answering "should per-throw tuning be suppressed during Learn's

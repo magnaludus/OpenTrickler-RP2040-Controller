@@ -208,16 +208,25 @@
                                     <span class="label-text">Bulk Safety Factor</span>
                                     <input type="number" class="input input-bordered" name="l9" step="0.1" min="1" max="5">
                                 </div>
+                                <div class="grid grid-cols-1 gap-1">
+                                    <span class="label-text">Landing Sigma</span>
+                                    <input type="number" class="input input-bordered" name="l10" step="0.5" min="1" max="4">
+                                </div>
                             </div>
                             <div class="text-sm opacity-70 mt-2">
                                 Learn hands the bulk (coarse) tube as much of the charge as it can and stops it as
                                 late as it dares. Two settings hold it back. <b>Time Goal</b> is the trade: the fit
                                 spends every second under it buying a closer handoff, so a lower goal gives a faster
                                 throw and a wider handoff, a higher goal a slower throw and a tighter one.
-                                <b>Bulk Safety Factor</b> is the margin: the handoff always covers this many times
-                                the coarse tube's own measured 3 sigma stop scatter, so 1.0 is bare 3 sigma and
-                                higher backs the handoff off. Raise it if you see overthrows. The fitted result
-                                lands in Coarse Stop Threshold on the Charge Mode page and stays editable there.
+                                <b>Bulk Safety Factor</b> is the margin on the bulk handoff: it always covers this
+                                many times the coarse tube's own measured 3 sigma stop scatter, so 1.0 is bare
+                                3 sigma and higher backs the handoff off. <b>Landing Sigma</b> is the same idea at
+                                the other end - how many sigma of fine landing error must fit inside the bracket,
+                                which is what caps the landing speed. It is the main control over how many throws
+                                land outside the bracket: landing error scales straight with landing speed, so
+                                going from 1 to 2 halves the spread and costs about a second and a half a throw.
+                                Raise either one if you see overthrows. The fitted results land in Coarse Stop
+                                Threshold and the profile's fine speeds, and stay editable there.
                             </div>
                             <button class="btn btn-neutral settings-apply-btn">Apply</button>
                         </form>
@@ -445,6 +454,41 @@
                             </div>
 
                             <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Lag Compensation</span>
+                                <select class="select select-bordered" name="c22">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Drives the motors off reading + rate x lag so the tubes slow before the scale catches up. The final stop is still on the real reading. Learn Powder measures the lag and turns this on.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Coarse Lag (s)</span>
+                                <input type="number" class="input input-bordered" name="c23" step="0.05" min="0" max="3">
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Fine Lag (s)</span>
+                                <input type="number" class="input input-bordered" name="c25" step="0.05" min="0" max="3">
+                                <span class="label-text-alt opacity-70">Coarse and fine are measured separately - on tested hardware they don't match (fine typically reads ~0.15-0.2s higher). Learn Powder sets both.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Auto Lag</span>
+                                <select class="select select-bordered" name="c24">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Re-measures the lag on every throw and tracks Fine Lag slowly. <b>Only runs when Lag Compensation is off, and defaults to off.</b> With compensation on, the fine motor is stopped early on purpose, so what lands afterwards is the leftover <i>after</i> compensation worked - not the real lag. Feeding that back shrinks the learned lag, which weakens compensation, which shrinks it further. On tested hardware it walked Fine Lag from 0.70s down to 0.49s and put +0.06gr into every charge. Live values are on the trickler page.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Coarse Tail Spread (gr)</span>
+                                <input type="number" class="input input-bordered" name="c26" step="0.01" min="0">
+                                <span class="label-text-alt opacity-70">From the last Learn Powder fit. Floors how far Learn's per-throw tuning can narrow the coarse stop threshold, so a run of clean throws can't shave the margin down past what the coarse tube's own variance needs. Learn Powder sets this - leave at 0 to disable the floor.</span>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-1">
                                 <span class="label-text">Fine Trickler Stop Threshold (not used, the active bracket sets the stop point)</span>
                                 <input type="number" class="input input-bordered" name="c6" step="0.001">
                             </div>
@@ -572,40 +616,6 @@
                                 <span class="label-text-alt opacity-70">Learn adjusts the selected profile's fine and coarse max speed and fine Kp in RAM, bounded to 50% to 140% of the starting values. Save the profile from the Profiles page to keep the result.</span>
                             </div>
 
-                            <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Lag Compensation</span>
-                                <select class="select select-bordered" name="c22">
-                                    <option value="true">On</option>
-                                    <option value="false">Off</option>
-                                </select>
-                                <span class="label-text-alt opacity-70">Drives the motors off reading + rate x lag so the tubes slow before the scale catches up. The final stop is still on the real reading. Learn Powder measures the lag and turns this on.</span>
-                            </div>
-
-                            <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Coarse Lag (s)</span>
-                                <input type="number" class="input input-bordered" name="c23" step="0.05" min="0" max="3">
-                            </div>
-
-                            <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Fine Lag (s)</span>
-                                <input type="number" class="input input-bordered" name="c25" step="0.05" min="0" max="3">
-                                <span class="label-text-alt opacity-70">Coarse and fine are measured separately - on tested hardware they don't match (fine typically reads ~0.15-0.2s higher). Learn Powder sets both.</span>
-                            </div>
-
-                            <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Auto Lag</span>
-                                <select class="select select-bordered" name="c24">
-                                    <option value="true">On</option>
-                                    <option value="false">Off</option>
-                                </select>
-                                <span class="label-text-alt opacity-70">Re-measures the lag on every throw (what landed after the motors stopped, divided by how fast the reading was climbing) and tracks it slowly. Only updates Fine Lag - that measurement is taken after the fine phase, so it's not a read on coarse's lag. Live values are on the trickler page.</span>
-                            </div>
-
-                            <div class="grid grid-cols-1 gap-1">
-                                <span class="label-text">Coarse Tail Spread (gr)</span>
-                                <input type="number" class="input input-bordered" name="c26" step="0.01" min="0">
-                                <span class="label-text-alt opacity-70">From the last Learn Powder fit. Floors how far Learn's per-throw tuning can narrow the coarse stop threshold, so a run of clean throws can't shave the margin down past what the coarse tube's own variance needs. Learn Powder sets this - leave at 0 to disable the floor.</span>
-                            </div>
 
                             <div class="divider"></div>
 
