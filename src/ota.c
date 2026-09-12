@@ -113,8 +113,18 @@ static void __no_inline_not_in_flash_func(ota_apply_job)(void * p) {
         flash_range_program(off, copy_buf, OTA_SECTOR_BYTES);
     }
     // The old image is gone. Do not return into flash. Reboot from here.
+#if defined(PICO_RP2350) && PICO_RP2350
     // Ask the bootrom for a normal reboot (ROM code, safe to call from RAM).
     rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_NORMAL | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS, 10, 0, 0);
+#else
+    // RP2040's bootrom has no rom_reboot, which is why this would not link for pico_w at all.
+    // watchdog_reboot() is not a substitute: it lives in flash, and flash has just been
+    // rewritten, so calling it would jump into whatever now occupies that address. Reset with
+    // register writes only, which stay inside this RAM-resident function. Clearing the watchdog
+    // scratch magic first makes the bootrom do a normal boot rather than honour a stale request.
+    watchdog_hw->scratch[4] = 0;
+    *(volatile uint32_t *) 0xE000ED0CU = 0x05FA0004U;   // AIRCR: SYSRESETREQ with the write key
+#endif
 
     // Fallback: watchdog with the power domains selected, otherwise the trigger resets nothing on RP2350
     for (int i = 0; i < 8; i += 1) watchdog_hw->scratch[i] = 0;

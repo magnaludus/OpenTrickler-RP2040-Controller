@@ -21,6 +21,11 @@ on:
         description: 'Release version, vX.Y (e.g. v2.0)'
         required: true
         type: string
+      recreate:
+        description: 'Delete an existing release and tag of this version first, so the tag lands on the commit actually being built'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -84,6 +89,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           V="${{ steps.ver.outputs.version }}"
+          if [ "${{ inputs.recreate }}" = "true" ]; then
+            # A tag left pointing at an older commit than the one built would ship binaries that
+            # do not match its own source. Clear both so the tag lands on GITHUB_SHA below.
+            gh release delete "$V" --yes --cleanup-tag 2>/dev/null || true
+            git push --delete origin "refs/tags/$V" 2>/dev/null || true
+          fi
           NOTES=".github/release_notes/${V}.md"
           # The release may already exist if someone published it from the web UI (which creates
           # the tag as a side effect). Attach the builds to it rather than failing, and leave any
