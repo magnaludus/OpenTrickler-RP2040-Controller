@@ -1,18 +1,26 @@
 name: Release
 
-# Publishes a GitHub Release when a vX.Y tag is pushed.
+# Publishes a GitHub Release with firmware for both boards attached.
 #
-# The tag has to be vX.Y exactly - scripts/gen_version.py matches
-# v<major>.<minor>-<commits>-g<hash> from `git describe --long`, so a three part
-# tag like v2.0.0 fails that match and the firmware reports its version as
-# "no-tag". fetch-depth: 0 is what makes the tag visible to git describe, which
-# is what bakes the real version into the build.
+# Two ways in:
+#   - push a vX.Y tag
+#   - run it manually and pass the version (used when tags cannot be pushed directly;
+#     the runner's token can create one where a client credential may not)
+#
+# The tag has to be vX.Y exactly. scripts/gen_version.py matches
+# v<major>.<minor>-<commits>-g<hash> from `git describe --long`, so a three part tag like
+# v2.0.0 fails that match and the firmware reports its version as "no-tag".
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, vX.Y (e.g. v2.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,6 +33,26 @@ jobs:
         with:
           fetch-depth: 0          # tags must be present for gen_version.py
           submodules: recursive
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME}"
+          fi
+          echo "$V" | grep -Eq '^v[0-9]+\.[0-9]+$' || {
+            echo "::error::Version must be vX.Y (got '$V'). gen_version.py cannot parse anything else,"
+            echo "::error::and the firmware would report its version as no-tag."
+            exit 1
+          }
+          # A manually dispatched run has no tag yet, and gen_version.py reads `git describe`, so
+          # the build would stamp "no-tag". Create it locally so the version bakes into the
+          # binary; the publish step below creates the real one on the remote.
+          git rev-parse -q --verify "refs/tags/$V" >/dev/null || git tag "$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building $V from $(git describe --tags --long --always)"
 
       - name: Install build dependencies
         run: |
@@ -44,28 +72,29 @@ jobs:
 
       - name: Collect artefacts
         run: |
+          V="${{ steps.ver.outputs.version }}"
           mkdir -p dist
-          cp build_pico2_w/app.uf2 "dist/opentrickler-${GITHUB_REF_NAME}-pico2_w.uf2"
-          cp build_pico_w/app.uf2  "dist/opentrickler-${GITHUB_REF_NAME}-pico_w.uf2"
-          echo "Built version string:"
-          cat build_pico2_w/../src/generated/version.c 2>/dev/null || true
+          cp build_pico2_w/app.uf2 "dist/opentrickler-${V}-pico2_w.uf2"
+          cp build_pico_w/app.uf2  "dist/opentrickler-${V}-pico_w.uf2"
+          echo "Version stamped into the firmware:"
+          grep -E 'version_string|vcs_hash|build_type' src/generated/version.c
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          NOTES=".github/release_notes/${GITHUB_REF_NAME}.md"
-          # The tag can arrive two ways: pushed on its own, or created by
-          # publishing a release in the web UI. In the second case the release
-          # already exists, so attach the builds to it and leave whatever notes
-          # were written there alone rather than failing or overwriting them.
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists - attaching builds to it."
-            gh release upload "$GITHUB_REF_NAME" dist/*.uf2 --clobber
+          V="${{ steps.ver.outputs.version }}"
+          NOTES=".github/release_notes/${V}.md"
+          # The release may already exist if someone published it from the web UI (which creates
+          # the tag as a side effect). Attach the builds to it rather than failing, and leave any
+          # notes written there alone.
+          if gh release view "$V" >/dev/null 2>&1; then
+            echo "Release $V already exists - attaching builds to it."
+            gh release upload "$V" dist/*.uf2 --clobber
           elif [ -f "$NOTES" ]; then
-            gh release create "$GITHUB_REF_NAME" dist/*.uf2 \
-              --title "$GITHUB_REF_NAME" --notes-file "$NOTES"
+            gh release create "$V" dist/*.uf2 --target "$GITHUB_SHA" \
+              --title "$V" --notes-file "$NOTES"
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.uf2 \
-              --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$V" dist/*.uf2 --target "$GITHUB_SHA" \
+              --title "$V" --generate-notes
           fi
