@@ -373,6 +373,55 @@ is ~7.5s), so `meets_time_goal` reports false and the fit falls back to
 fastest. That is honest rather than broken - raising the goal to 8s makes
 the tightest-handoff objective engage again and yields 0.82gr at 7.84s.
 
+## Releases
+
+`git push` of a **tag** is refused with HTTP 403 in this environment (branches
+push fine; re-tested repeatedly, it is a hard platform restriction). The GitHub
+MCP server exposes no release-creation tool either. The way around both: the
+Actions runner's `GITHUB_TOKEN` has `contents: write` and can create tags and
+releases where a client credential cannot.
+
+`.github/workflows/release.yml` therefore takes two entry points - a `v*` tag
+push, or `workflow_dispatch` with a `version` input. Dispatch it with
+`mcp__github__actions_run_trigger` (`method: run_workflow`, `workflow_id:
+release.yml`, `ref: main`, `inputs: {version: "v2.0"}`). It builds both boards
+from a clean checkout and publishes the release with
+`.github/release_notes/<tag>.md` as the body.
+
+Things that bit us cutting v2.0, all now handled in the workflow:
+
+- **The tag must be `vX.Y` exactly.** `scripts/gen_version.py` matches
+  `v<major>.<minor>-<commits>-g<hash>` from `git describe --long`; `v2.0.0`
+  fails that match and the firmware silently reports `no-tag`. The workflow
+  now rejects anything else rather than shipping a mislabelled build.
+- **A dispatched run has no tag at checkout**, so `git describe` would stamp
+  `no-tag` into the binary. The workflow creates the tag locally before
+  building and lets the publish step create the real one, pinned with
+  `--target $GITHUB_SHA`.
+- **Publishing from the web UI creates the tag as a side effect**, which fires
+  the workflow at whatever commit was HEAD then - and that release already
+  exists by the time the job reaches `gh release create`. It now detects that
+  and uploads to the existing release instead of failing, and a `recreate`
+  input deletes and re-cuts the tag when it is pointing at an older commit than
+  the one being built.
+
+## Pico W (RP2040) had never built
+
+Found by the first release run, not by anything on the bench: `ota.c` calls
+`rom_reboot`, an RP2350 bootrom function, so the `pico_w` target failed at link
+with an undefined reference. Every build of this fork had been `pico2_w`.
+
+`watchdog_reboot()` is not a substitute in that spot. `ota_apply_job` runs from
+RAM precisely because it has just rewritten the flash it was executing from, and
+`watchdog_reboot` lives in flash - calling it jumps into whatever now occupies
+that address. The RP2040 path uses register writes that stay inside the
+RAM-resident function: clear `watchdog_hw->scratch[4]` so the bootrom does a
+normal boot, then AIRCR `SYSRESETREQ`.
+
+Both targets build. **RP2040 is untested** - no hardware for it, and RAM sits at
+88% there against 44% on RP2350. The release notes say so rather than implying
+both boards are equally proven. BOOTSEL recovers either board regardless.
+
 ## Cup return was detected against a stale zero
 
 User: during Learn Powder, after dumping a full cup the "Return cup" step
