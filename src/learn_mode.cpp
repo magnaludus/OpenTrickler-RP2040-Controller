@@ -46,7 +46,9 @@ static bool throw_running = false;
 #define LEARN_FINE_TAPER_MIN_GR         0.20f   // shortest taper window
 #define LEARN_FINE_TAPER_TAIL_MULT      3.0f    // taper window = this x the fine tail at max, floored above
 #define LEARN_SETTLE_ALLOWANCE_S        0.50f
-#define LEARN_CUP_REMOVED_GR            -5.0f   // reading below this means the cup came off
+#define LEARN_CUP_REMOVED_GR            -5.0f   // reading this far below the empty pan means the cup came off
+#define LEARN_CUP_RETURN_RISE_GR        2.0f    // rise above the empty pan that means the cup is back
+#define LEARN_ZERO_TIMEOUT_MS           60000   // give up on zeroing rather than wait forever
 #define LEARN_ZERO_RETRY_MS             2500    // resend the zero command if the scale has not taken it by then
 #define LEARN_ZERO_MAX_TRIES            12
 
@@ -243,11 +245,16 @@ static bool auto_zero(void) {
     // Let it settle first so the zero is taken on a still reading
     if (!wait_for_stable(&settled)) return false;
 
-    // The A&D ignores a zero command while it reports unstable, so send it, watch the reading,
-    // and send it again if it has not taken. The knob also sends one by hand.
+    // The A&D drops a zero or tare it receives while it reports itself unstable, so only send one
+    // when the reading is actually sitting still, and re-send if it did not take. Firing them on a
+    // fixed timer regardless of stability - which is what this used to do - burns the retry budget
+    // on commands the scale was never going to accept. The knob forces one by hand.
     FloatRingBuffer data_buffer(6);
     int tries = 0;
+    int samples_since_send = 0;
+    bool force_send = false;
     TickType_t next_send = 0;
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(LEARN_ZERO_TIMEOUT_MS);
 
     while (true) {
         TickType_t last_tick = xTaskGetTickCount();
@@ -259,15 +266,35 @@ static bool auto_zero(void) {
             return false;
         }
         if (ev == BUTTON_ENCODER_PRESSED) {
-            next_send = 0;   // force a resend now
+            next_send = 0;
+            force_send = true;   // the user is telling us to send now, stable or not
         }
 
-        if (last_tick >= next_send) {
-            if (tries >= LEARN_ZERO_MAX_TRIES) {
-                learn_mode.state = LEARN_STATE_ERROR;
-                set_message("Zero failed");
-                return false;
-            }
+        // Waiting on stability can no longer hang forever: without this, a reading that never
+        // settles would leave the retry counter untouched and the loop would never give up.
+        if (last_tick > deadline || tries >= LEARN_ZERO_MAX_TRIES) {
+            learn_mode.state = LEARN_STATE_ERROR;
+            set_message("Zero failed");
+            return false;
+        }
+
+        float m;
+        if (scale_block_wait_for_next_measurement(300, &m)) {
+            data_buffer.enqueue(m);
+            if (samples_since_send < 1000) samples_since_send += 1;
+        }
+
+        bool steady = data_buffer.getCounter() >= 6 &&
+                      data_buffer.getSd() < charge_mode_config.eeprom_charge_mode_data.set_point_sd_margin;
+
+        // Only call it done on readings taken after the last command, so a stale pre-command
+        // buffer can't be mistaken for a zero that took.
+        if (steady && samples_since_send >= 6 &&
+            fabsf(data_buffer.getMean()) < charge_mode_config.eeprom_charge_mode_data.set_point_mean_margin) {
+            return true;
+        }
+
+        if (last_tick >= next_send && (steady || force_send)) {
             // Alternate re-zero and tare. Re-zero on an A&D only works within a small window either
             // side of the calibration zero, and after a cup of powder has been tared off we are well
             // outside it. Tare covers the full range, so it is what actually takes at that point.
@@ -281,20 +308,12 @@ static bool auto_zero(void) {
                 scale_write(tare_cmd, sizeof(tare_cmd) - 1);
             }
             tries += 1;
+            force_send = false;
             next_send = last_tick + pdMS_TO_TICKS(LEARN_ZERO_RETRY_MS);
-            data_buffer.reset();
+            samples_since_send = 0;
             if (tries > 2) set_message("Zeroing, knob to retry");
         }
 
-        float m;
-        if (scale_block_wait_for_next_measurement(300, &m)) {
-            data_buffer.enqueue(m);
-        }
-        if (data_buffer.getCounter() >= 6 &&
-            data_buffer.getSd() < charge_mode_config.eeprom_charge_mode_data.set_point_sd_margin &&
-            fabsf(data_buffer.getMean()) < charge_mode_config.eeprom_charge_mode_data.set_point_mean_margin) {
-            return true;
-        }
         vTaskDelayUntil(&last_tick, pdMS_TO_TICKS(200));
     }
 }
@@ -318,16 +337,28 @@ static bool empty_cup_and_zero(void) {
         if (scale_block_wait_for_next_measurement(200, &m) && m < LEARN_CUP_REMOVED_GR) break;
     }
 
+    // Where the pan sits with the cup off. The zero in force was taken with the cup AND all the
+    // powder on it, so this is a long way negative - and by however much is about to be dumped.
+    // The cup coming back therefore cannot be detected against a fixed threshold: an empty cup
+    // returned after dumping 130gr still reads about -130. That test only ever passed when a
+    // sample happened to land on the bounce as the cup touched down, which is why it worked some
+    // of the time and hung waiting for a manual zero the rest.
     set_message("Return cup");
-    // Wait for it to come back
+    float off_level;
+    if (!wait_for_stable(&off_level)) return false;
+
+    // Watch for a rise relative to that, so it works no matter how much powder came out.
     while (true) {
         if (!check_abort()) return false;
         float m;
-        if (scale_block_wait_for_next_measurement(200, &m) && m > LEARN_CUP_REMOVED_GR) break;
+        if (scale_block_wait_for_next_measurement(200, &m) && m > off_level + LEARN_CUP_RETURN_RISE_GR) break;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
 
-    // Zero on the empty cup. A whole cup of powder has been tared off by now, so lead with tare.
+    // Let the cup settle before taring. The A&D drops a tare it receives while it still reports
+    // itself unstable, and a cup that was just set down is about as unstable as it gets.
+    set_message("Zeroing");
+    float settled;
+    if (!wait_for_stable(&settled)) return false;
     {
         const char tare_cmd[] = "T\r\n";
         scale_write(tare_cmd, sizeof(tare_cmd) - 1);

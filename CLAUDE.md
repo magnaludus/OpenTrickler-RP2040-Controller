@@ -364,6 +364,39 @@ is ~7.5s), so `meets_time_goal` reports false and the fit falls back to
 fastest. That is honest rather than broken - raising the goal to 8s makes
 the tightest-handoff objective engage again and yields 0.82gr at 7.84s.
 
+## Cup return was detected against a stale zero
+
+User: during Learn Powder, after dumping a full cup the "Return cup" step
+sometimes never auto-zeroes and needs the scale's zero button pressed by hand.
+
+`empty_cup_and_zero()` detected the cup coming back with a fixed threshold,
+`m > LEARN_CUP_REMOVED_GR` (-5gr). But `throw_for_time()` re-zeroes after every
+throw with the powder still in the cup, so by the time the cup is full the zero
+in force is "cup + everything accumulated". Return the *empty* cup after dumping
+~130gr and it reads about **-130**, nowhere near -5. The test only ever passed
+when a sample happened to land during the bounce as the cup touched down and
+momentarily overshot above -5 - hence intermittent. Pressing the scale's own
+zero button forces the reading to 0, clears the threshold, and it proceeds,
+which is exactly the workaround that was being used.
+
+Fixed by settling once with the cup off to capture the empty-pan level, then
+watching for a rise of `LEARN_CUP_RETURN_RISE_GR` (2gr) above *that*. Works
+regardless of how much powder was dumped.
+
+Two related fixes in the same path:
+
+- The tare after the cup returned was sent blind, 500ms after detection. The
+  A&D drops a tare received while it reports itself unstable, and a cup just
+  set down is maximally unstable, so that command was usually thrown away.
+  Now waits for a stable reading first.
+- `auto_zero()` fired its zero/tare retries on a fixed 2.5s timer irrespective
+  of stability, burning the 12-try budget on commands the scale would never
+  accept. It now only sends when the reading is steady (the knob still forces
+  one), tracks `samples_since_send` so a stale pre-command buffer cannot be
+  read as a zero that took, and carries a `LEARN_ZERO_TIMEOUT_MS` wall-clock
+  deadline - gating sends on stability would otherwise let a never-settling
+  scale hang forever without incrementing the retry counter.
+
 ## Auto-lag ate its own correction; landing margin was 1 sigma
 
 Two faults, both found from one session CSV where the Learn confirm set went
