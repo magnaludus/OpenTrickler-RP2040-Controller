@@ -14,8 +14,17 @@ firmware for a powder-trickler/scale build on a **Raspberry Pi Pico 2 W**.
 ## What's on this fork (session-v1.14 baseline)
 
 Ported from an earlier chat-based dev loop (patch-and-flash against a full
-repo clone, no local git). Current firmware version tag: `session-v1.14`.
-Flashed over WiFi via Settings > Firmware (single `.uf2`).
+repo clone, no local git). Flashed over WiFi via Settings > Firmware (single
+`.uf2`), or BOOTSEL + drag.
+
+Versioning now comes from git, not a hand-maintained constant.
+`scripts/gen_version.py` runs `git describe` at build time, so the version
+screen reads `Ver: 2.0.0` / `VCS: <hash>` off the reachable `vX.Y` tag, and the
+portal's firmware page shows `2.0.0 (<hash>)`. The old `SESSION_BUILD_TAG` in
+`session_version.h` is gone - it still said "session-v1.14" on every build after
+v1.14, which is how a string you have to remember to bump ends up lying. The
+version screen's third line now shows the CMake build type instead, which was
+being generated and never displayed.
 
 - Session stats with CSV export (`src/session_stats.c/h`)
 - Normal and Match brackets in 0.02 gr steps (`src/charge_mode.cpp/h`)

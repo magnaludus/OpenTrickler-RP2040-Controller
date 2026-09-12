@@ -16,7 +16,7 @@
 
 #include "ota.h"
 #include "common.h"
-#include "session_version.h"
+#include "version.h"
 
 
 static ota_state_t ota_state = OTA_STATE_IDLE;
@@ -32,6 +32,15 @@ static uint32_t sector_index = 0;
 
 static void * ota_connection = NULL;
 
+
+// What the portal shows as the running firmware. Built from the generated version rather than a
+// hand-maintained constant - the old one said "session-v1.14" for every build after v1.14, which
+// is exactly how a string you have to remember to bump ends up lying.
+static const char * ota_running_version(void) {
+    static char buf[40];
+    snprintf(buf, sizeof(buf), "%s (%s)", version_string, vcs_hash);
+    return buf;
+}
 
 static void set_msg(const char * s) {
     strncpy(ota_message, s, sizeof(ota_message) - 1);
@@ -284,7 +293,7 @@ bool http_rest_ota_state(struct fs_file *file, int num_params, char *params[], c
              (unsigned long) ota_expected,
              (unsigned long) ota_crc,
              ota_message,
-             SESSION_BUILD_TAG,
+             ota_running_version(),
              (unsigned long) OTA_MAX_IMAGE_BYTES);
 
     size_t len = strlen(json_buffer);

@@ -15,7 +15,6 @@
 #include "profile.h"
 #include "servo_gate.h"
 #include "session_stats.h"
-#include "session_version.h"
 
 #ifndef MUI_U8G2_V_PADDING
 #define MUI_U8G2_V_PADDING 1
@@ -71,7 +70,7 @@ uint8_t render_version_page(mui_t * ui, uint8_t msg) {
             snprintf(buf, sizeof(buf), "VCS: %s", vcs_hash);
             u8g2_DrawStr(u8g2, x, y + 10, buf);
 
-            snprintf(buf, sizeof(buf), "Build: %s", SESSION_BUILD_TAG);
+            snprintf(buf, sizeof(buf), "Build: %s", build_type);
             u8g2_DrawStr(u8g2, x, y + 20, buf);
 
             break;
