@@ -55,7 +55,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NOTES=".github/release_notes/${GITHUB_REF_NAME}.md"
-          if [ -f "$NOTES" ]; then
+          # The tag can arrive two ways: pushed on its own, or created by
+          # publishing a release in the web UI. In the second case the release
+          # already exists, so attach the builds to it and leave whatever notes
+          # were written there alone rather than failing or overwriting them.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists - attaching builds to it."
+            gh release upload "$GITHUB_REF_NAME" dist/*.uf2 --clobber
+          elif [ -f "$NOTES" ]; then
             gh release create "$GITHUB_REF_NAME" dist/*.uf2 \
               --title "$GITHUB_REF_NAME" --notes-file "$NOTES"
           else
