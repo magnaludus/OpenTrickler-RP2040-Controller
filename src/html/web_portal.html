@@ -360,6 +360,7 @@
                                 </select>
 
                                 <button class="btn btn-neutral system-control-export-btn" onclick="onExportProfileBtnClicked(event)">Export Profile</button>
+                                <span class="label-text-alt opacity-70 col-span-2">Exports this profile only. To back up or restore <em>everything</em> - all profiles plus every setting - use Backup &amp; Restore on the System Control page.</span>
                             </div>
 
                             <div class="divider"></div>
@@ -1028,6 +1029,14 @@
                         <div class="divider"></div>
 
                         <!-- Export and Import config -->
+                        <h3 class="font-bold text-lg">Backup &amp; Restore</h3>
+                        <div class="text-sm opacity-70 mb-2">
+                            Export writes every setting on the trickler - scale, charge mode, both motors,
+                            display, wireless, LEDs, servo gate, Learn Powder, and all eight profiles - to a
+                            single <code>.json</code> file. Import reads one back and reboots into it. Worth
+                            taking before a firmware update, since a change to the stored format resets
+                            settings to defaults on first boot.
+                        </div>
                         <div class="grid grid-cols-2 gap-1">
                             <button class="btn btn-neutral system-control-export-btn" onclick="onExportConfigClicked()">Export Config</button>
                             <button class="btn btn-neutral system-control-import-btn" onclick="onImportConfigClicked()">Import Config</button>
@@ -2392,6 +2401,7 @@
             "/rest/profile_config?pf=6",
             "/rest/profile_config?pf=7",
             "/rest/servo_gate_config",
+            "/rest/learn_config",
         ]
 
         // Read metadata
