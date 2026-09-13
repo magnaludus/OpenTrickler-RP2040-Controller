@@ -446,6 +446,43 @@ Things that bit us cutting v2.0, all now handled in the workflow:
   input deletes and re-cuts the tag when it is pointing at an older commit than
   the one being built.
 
+## Pico W failed at boot: the stepper program was loaded twice
+
+A user of the v2.1 release reported (in German, via the repo owner) that the
+firmware runs well on a Pico 2 W but on a **Pico W** throws a motor error and
+never brings the screen up. That is the untested board the v2.0/v2.1 notes
+flagged, now confirmed broken on hardware.
+
+Root cause is not the RP2040 reboot path fixed earlier - it is PIO instruction
+memory. `driver_pio_init()` hard-pinned `MOTOR_PIO` (pio0) and called
+`pio_add_program(pio, &stepper_program)` **once per motor**. Both steppers run
+the same 7-instruction program, so it consumed 14 of pio0's 32 instruction
+words instead of 7. RP2350 has three PIO blocks and absorbed the waste; RP2040
+has two, and the cyw43 wifi chip's SPI program claims space in one of them via
+`pio_claim_free_sm_and_add_program_for_gpio_range` at startup. The second
+motor then had nowhere to load, `driver_pio_init()` returned false,
+`motor_init()` returned `MOTOR_INIT_PIO_ERR`, and boot stopped there - which is
+both reported symptoms from one fault, the motor error and the dead screen.
+
+Fix: load the program once per PIO and cache `(pio, offset)` so the second
+motor shares it, claim state machines with `panic=false`, and fall back to
+`pio_claim_free_sm_and_add_program_for_gpio_range` across any block if the
+preferred one is full. The author had left that fallback commented out in the
+same function, so it looks like this was suspected before.
+
+**Unverified on hardware** - no RP2040 here. RAM on that target also sits at
+87.95% (230552 of 262144 B, of which 128 KB is `configTOTAL_HEAP_SIZE`), which
+links but leaves little room; if a Pico W still misbehaves after this, the heap
+size is the next thing to look at.
+
+## Import/export already exists, it is just buried
+
+Same user asked whether there is an import function. There is:
+**Settings > System Control > Import Config / Export Config**
+(`onImportConfigClicked` / `onExportConfigClicked`), plus **Export Profile** on
+the Profiles page. Nothing to build - it is a discoverability problem, at the
+bottom of the last settings page with no mention anywhere else.
+
 ## Pico W (RP2040) had never built
 
 Found by the first release run, not by anything on the bench: `ota.c` calls

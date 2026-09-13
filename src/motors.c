@@ -300,47 +300,54 @@ bool driver_io_init(motor_config_t * motor_config) {
     return true;
 }
 
+// Both steppers run the same program, and PIO instruction memory is only 32 words per block.
+// Loading it once per motor burned 14 of those instead of 7. That was survivable on RP2350, which
+// has three PIO blocks, but not on RP2040: it has two, and the wifi chip's SPI program claims
+// space in one of them at startup. The second motor then had nowhere to load, driver_pio_init
+// returned false, motor_init reported MOTOR_INIT_PIO_ERR and the rest of the boot never ran -
+// which is why a Pico W showed a motor error and never brought the screen up.
+//
+// Load the program once per PIO and share the offset, and if the preferred block is full, take
+// whichever one still has room rather than giving up.
+static PIO stepper_program_pio = NULL;
+static uint stepper_program_offset = 0;
+static bool stepper_program_loaded = false;
+
 bool driver_pio_init(motor_config_t * motor_config) {
-    // Allocate PIO to the stepper
-    PIO pio = MOTOR_PIO;  // Always use specified PIO to ensure the resource is claimed
-    int sm;
-    int offset;
+    PIO pio = MOTOR_PIO;
+    uint sm = 0;
+    uint offset = 0;
+    bool have_sm = false;
 
-    // Claim an unused state machine
-    sm = pio_claim_unused_sm(pio, true);
-    if (sm < 0) {
-        printf("Unable to claim state machine, err: %d\n", sm);
-        return false;
+    // Preferred block first, so both motors stay together where possible.
+    int claimed = pio_claim_unused_sm(pio, false);
+    if (claimed >= 0) {
+        sm = (uint) claimed;
+        if (stepper_program_loaded && stepper_program_pio == pio) {
+            offset = stepper_program_offset;    // already resident here, just point at it
+            have_sm = true;
+        }
+        else if (pio_can_add_program(pio, &stepper_program)) {
+            offset = pio_add_program(pio, &stepper_program);
+            stepper_program_pio = pio;
+            stepper_program_offset = offset;
+            stepper_program_loaded = true;
+            have_sm = true;
+        }
+        else {
+            pio_sm_unclaim(pio, sm);            // no instruction room, fall through
+        }
     }
 
-    // Load program to the state machine
-    offset = pio_add_program(pio, &stepper_program);
-    if (offset < 0) {
-        printf("Unable to add program, err: %d\n", offset);
-        return false;
+    if (!have_sm) {
+        // Any block with a free state machine and room for the program.
+        if (!pio_claim_free_sm_and_add_program_for_gpio_range(
+                &stepper_program, &pio, &sm, &offset, motor_config->step_pin, 1, true)) {
+            printf("Unable to claim PIO for stepper motor\n");
+            return false;
+        }
     }
 
-    // is_ok = pio_claim_free_sm_and_add_program_for_gpio_range(
-    //     &stepper_program, 
-    //     &pio, 
-    //     &sm, 
-    //     &offset, 
-    //     motor_config->step_pin, 
-    //     1, 
-    //     true
-    // );
-    // 
-    // if (!is_ok) {
-    //     printf("Unable to claim PIO for stepper motor\n");
-    //     return false;
-    // }
-
-    stepper_program_init(pio, sm, offset, motor_config->step_pin);
-
-    // Start stepper state machine
-    pio_sm_set_enabled(pio, sm, true);
-
-    // Record the PIO configuration
     motor_config->pio_config.pio = pio;
     motor_config->pio_config.sm = sm;
 
