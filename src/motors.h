@@ -89,6 +89,7 @@ bool motor_config_save(void);
 void motor_task(void *p);
 void motor_set_speed(motor_select_t selected_motor, float new_velocity);
 uint16_t get_motor_max_speed(motor_select_t selected_motor);
+const char * motor_get_pio_err_detail(void);   // free SMs / instruction room, when PIO init failed
 float get_motor_min_speed(motor_select_t selected_motor);
 void motor_enable(motor_select_t selected_motor, bool enable);
 const char * get_motor_select_string(motor_select_t selected_motor);

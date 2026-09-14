@@ -313,6 +313,30 @@ static PIO stepper_program_pio = NULL;
 static uint stepper_program_offset = 0;
 static bool stepper_program_loaded = false;
 
+// Filled in when PIO allocation fails, and shown under "PIO ERR" on the error screen. The first
+// attempt at fixing a Pico W boot failure was reasoned from code and turned out not to be the whole
+// story; "PIO ERR" alone says nothing about whether state machines or instruction memory ran out,
+// so a report from a user who can reproduce it is worth more if the screen carries the numbers.
+static char pio_err_detail[24] = "";
+
+const char * motor_get_pio_err_detail(void) {
+    return pio_err_detail;
+}
+
+static void record_pio_failure(void) {
+    int free_sm[2] = {0, 0};
+    bool room[2] = {false, false};
+    PIO blocks[2] = {pio0, pio1};
+    for (int b = 0; b < 2; b += 1) {
+        for (uint i = 0; i < 4; i += 1) {
+            if (!pio_sm_is_claimed(blocks[b], i)) free_sm[b] += 1;
+        }
+        room[b] = pio_can_add_program(blocks[b], &stepper_program);
+    }
+    snprintf(pio_err_detail, sizeof(pio_err_detail), "sm %d/%d mem %d/%d",
+             free_sm[0], free_sm[1], room[0] ? 1 : 0, room[1] ? 1 : 0);
+}
+
 bool driver_pio_init(motor_config_t * motor_config) {
     PIO pio = MOTOR_PIO;
     uint sm = 0;
@@ -343,7 +367,8 @@ bool driver_pio_init(motor_config_t * motor_config) {
         // Any block with a free state machine and room for the program.
         if (!pio_claim_free_sm_and_add_program_for_gpio_range(
                 &stepper_program, &pio, &sm, &offset, motor_config->step_pin, 1, true)) {
-            printf("Unable to claim PIO for stepper motor\n");
+            record_pio_failure();
+            printf("Unable to claim PIO for stepper motor (%s)\n", pio_err_detail);
             return false;
         }
     }
@@ -721,6 +746,11 @@ void handle_motor_init_error(motor_init_err_t err) {
         // Draw error message
         u8g2_SetFont(display_handler, u8g2_font_profont11_tf);
         u8g2_DrawStr(display_handler, 5, 25, error_string);
+
+        // Free state machines and instruction room per PIO block, when that is what failed
+        if (err == MOTOR_INIT_PIO_ERR && strlen(motor_get_pio_err_detail())) {
+            u8g2_DrawStr(display_handler, 5, 37, motor_get_pio_err_detail());
+        }
 
         // Draw error message
         u8g2_SendBuffer(display_handler);

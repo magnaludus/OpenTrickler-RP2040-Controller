@@ -446,6 +446,38 @@ Things that bit us cutting v2.0, all now handled in the workflow:
   input deletes and re-cuts the tag when it is pointing at an older commit than
   the one being built.
 
+## Pico W still fails on v2.2 - the PIO fix was not the whole story
+
+The tester flashed v2.2 pico_w and got the same **Motor Init Error / PIO ERR**.
+So loading the stepper program twice was a real bug but not the cause, or not
+the only one. Init order is the thing I did not check before:
+`neopixel_led_init()` (two ws2812 state machines, added as two separate
+programs) and `wireless_init()` (cyw43 claims a state machine and its SPI
+program) both run *before* `motors_init()` in `app.c`. On RP2040 that is two PIO
+blocks shared four ways.
+
+Rather than guess a second time, the failure is now instrumented:
+`record_pio_failure()` captures free state machines and whether the stepper
+program still fits, per block, and the error screen prints it under "PIO ERR" as
+`sm <free0>/<free1> mem <fits0>/<fits1>`. The next report from that user
+distinguishes "no state machines left" from "no instruction memory left"
+outright, instead of another round of reasoning from here.
+
+Worth remembering: I told the user the first fix was likely and it was not. The
+screen said "PIO ERR" and nothing else, which is why two rounds were needed.
+
+## Backup/restore was reachable, just not on screen
+
+Same tester: "I couldn't find the import function ... I couldn't select the
+system". The nav list does contain System Control - it is the **last** entry,
+below a non-clickable `menu-title` divider reading "System" (the blank gap in
+his screenshot). The drawer `<ul>` had `min-h-full` and no overflow rule, so on
+a short window the last item simply has nowhere to go and cannot be reached.
+
+Fixed with `h-full overflow-y-auto flex-nowrap`. The same tag also carried a
+malformed attribute, `id=drawerSlide"` with no opening quote, which had been
+there all along.
+
 ## "No flow, check tube" fired on a tube that was flowing
 
 Second field report on v2.1/v2.2 (user CiscoBoy, with a photo): Learn Powder
