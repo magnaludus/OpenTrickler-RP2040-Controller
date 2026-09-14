@@ -446,6 +446,35 @@ Things that bit us cutting v2.0, all now handled in the workflow:
   input deletes and re-cuts the tag when it is pointing at an older commit than
   the one being built.
 
+## "No flow, check tube" fired on a tube that was flowing
+
+Second field report on v2.1/v2.2 (user CiscoBoy, with a photo): Learn Powder
+aborts with **"No flow, check tube"** while the fine motor is visibly running and
+dispensing. His A&D read **0.22 GN** at the moment of the error.
+
+`throw_for_time()` aborted when measured flow fell below `LEARN_MIN_FLOW_GPS`
+(0.02 gr/s). Flow is `mass / run_s`, so the mass that floor demands scales with
+how long the step runs - and the fine ladder's slowest step runs up to
+`LEARN_FINE_MAX_RUN_S` (12s). It was therefore requiring **0.24gr** from the step
+deliberately chosen to be the slowest the tube can manage. His 0.22gr missed by
+0.02gr. The floor was strictest exactly where the firmware asks the tube to be
+slowest, which is backwards.
+
+| step | run | mass needed (old) | (new) |
+|---|---|---|---|
+| coarse probe | 1.0s | 0.02gr | 0.05gr |
+| fine probe | 4.0s | 0.08gr | 0.05gr |
+| fine ladder, slowest | 12.0s | **0.24gr** | 0.05gr |
+
+Now judged on mass, not rate: below `LEARN_MIN_THROW_GR` (0.05gr) off a whole
+timed run means nothing is coming out. A slow throw is still a perfectly usable
+data point for the fit - only an empty tube is not, and an empty tube delivers
+essentially nothing at any speed or duration.
+
+The message also reports what was measured (`No flow: 0.22gr in 12s`) instead of
+asserting a diagnosis. "No flow" was wrong and sent the user looking at his
+hardware.
+
 ## Pico W failed at boot: the stepper program was loaded twice
 
 A user of the v2.1 release reported (in German, via the repo owner) that the

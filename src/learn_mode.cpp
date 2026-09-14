@@ -74,7 +74,7 @@ static float max_settled_coarse = 0.0f;
 static float max_settled_fine = 0.0f;
 #define LEARN_COARSE_STOP_MIN_GR        0.30f
 #define LEARN_THROW_TIMEOUT_MS          120000
-#define LEARN_MIN_FLOW_GPS              0.02f   // below this the tube is not moving powder, abort
+#define LEARN_MIN_THROW_GR              0.05f   // less than this off a whole timed run means nothing is coming out
 
 
 #define LEARN_BRACKET_USE_FRAC          0.80f   // fine landing error has to fit in this much of the bracket
@@ -452,9 +452,17 @@ static bool throw_for_time(motor_select_t motor, float speed, float run_s, float
     if (mass > *max_settled) *max_settled = mass;
     learn_mode.cup_load_gr += mass;
 
-    if (out->flow_gps < LEARN_MIN_FLOW_GPS) {
+    // Judge an empty or blocked tube on what actually landed, not on a rate. This used to abort
+    // below 0.02 gr/s, which sounds tiny until you notice the fine ladder's slowest step runs for
+    // up to LEARN_FINE_MAX_RUN_S - so it was demanding 0.24gr from the step deliberately chosen to
+    // be the slowest the tube can do. A user with a slower fine tube got "No flow, check tube"
+    // having watched 0.22gr land in front of him. A slow throw is still a usable data point for the
+    // fit; only an empty tube is not, and an empty tube delivers essentially nothing at any speed.
+    if (mass < LEARN_MIN_THROW_GR) {
         learn_mode.state = LEARN_STATE_ERROR;
-        set_message("No flow, check tube");
+        char msg[32];
+        snprintf(msg, sizeof(msg), "No flow: %.2fgr in %.0fs", mass, actual_run_s);
+        set_message(msg);
         return false;
     }
 
