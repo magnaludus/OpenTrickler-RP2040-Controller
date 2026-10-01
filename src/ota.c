@@ -11,6 +11,8 @@
 #include "hardware/structs/psm.h"
 #include "pico/bootrom.h"
 #include "boot/picoboot_constants.h"
+#include "boot/uf2.h"
+#include "hardware/regs/addressmap.h"
 #include "lwip/apps/httpd.h"
 #include "lwip/pbuf.h"
 
@@ -86,10 +88,16 @@ static uint32_t crc32_flash(uint32_t offset, uint32_t len) {
 // Does the staged image look like firmware for this board? Vector table sanity only.
 static bool staged_image_plausible(uint32_t len) {
     if (len < 4096) return false;
-    const uint32_t * v = (const uint32_t *)(XIP_BASE + OTA_STAGE_OFFSET);
+    // RP2040 images begin with the 256-byte second-stage bootloader.
+#if defined(PICO_RP2350) && PICO_RP2350
+    const uint32_t vector_offset = 0;
+#else
+    const uint32_t vector_offset = 256;
+#endif
+    const uint32_t * v = (const uint32_t *)(XIP_BASE + OTA_STAGE_OFFSET + vector_offset);
     uint32_t sp = v[0];
     uint32_t reset = v[1];
-    bool sp_ok = (sp >= 0x20000000u && sp <= 0x20082000u);
+    bool sp_ok = (sp >= SRAM_BASE && sp <= SRAM_END && (sp & 7u) == 0);
     bool reset_ok = (reset >= 0x10000000u && reset < 0x10000000u + len && (reset & 1u) == 1u);
     return sp_ok && reset_ok;
 }
@@ -157,13 +165,14 @@ err_t httpd_post_begin(void *connection, const char *uri, const char *http_reque
         snprintf(response_uri, response_uri_len, "/404");
         return ERR_VAL;
     }
-    if (content_len <= 0 || (uint32_t) content_len > OTA_MAX_IMAGE_BYTES) {
-        ota_state = OTA_STATE_ERROR;
-        set_msg("Bad image size");
+    // Do not let a second upload replace the active connection or interrupt apply.
+    if (ota_state == OTA_STATE_APPLYING || ota_state == OTA_STATE_RECEIVING) {
         snprintf(response_uri, response_uri_len, "/rest/ota_state");
         return ERR_VAL;
     }
-    if (ota_state == OTA_STATE_APPLYING) {
+    if (content_len <= 0 || (uint32_t) content_len > OTA_MAX_IMAGE_BYTES) {
+        ota_state = OTA_STATE_ERROR;
+        set_msg("Bad image size");
         snprintf(response_uri, response_uri_len, "/rest/ota_state");
         return ERR_VAL;
     }
@@ -197,6 +206,12 @@ static bool flush_sector(void) {
 
 err_t httpd_post_receive_data(void *connection, struct pbuf *p) {
     if (connection != ota_connection || ota_state != OTA_STATE_RECEIVING) {
+        pbuf_free(p);
+        return ERR_VAL;
+    }
+    if (p->tot_len > ota_expected - ota_received) {
+        ota_state = OTA_STATE_ERROR;
+        set_msg("Upload exceeds image size");
         pbuf_free(p);
         return ERR_VAL;
     }
@@ -240,7 +255,7 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
             set_msg("Upload incomplete");
         }
     }
-    ota_connection = NULL;
+    if (connection == ota_connection) ota_connection = NULL;
     snprintf(response_uri, response_uri_len, "/rest/ota_state");
 }
 
@@ -254,6 +269,11 @@ bool http_rest_ota_state(struct fs_file *file, int num_params, char *params[], c
     const char * action = NULL;
     uint32_t client_crc = 0;
     bool have_crc = false;
+#if defined(PICO_RP2350) && PICO_RP2350
+    const uint32_t family = RP2350_ARM_S_FAMILY_ID;
+#else
+    const uint32_t family = RP2040_FAMILY_ID;
+#endif
 
     for (int idx = 0; idx < num_params; idx += 1) {
         if (strcmp(params[idx], "a0") == 0) action = values[idx];
@@ -262,7 +282,7 @@ bool http_rest_ota_state(struct fs_file *file, int num_params, char *params[], c
 
     if (action != NULL) {
         if (strcmp(action, "reset") == 0) {
-            if (ota_state != OTA_STATE_APPLYING) {
+            if (ota_state != OTA_STATE_APPLYING && ota_state != OTA_STATE_RECEIVING) {
                 ota_state = OTA_STATE_IDLE;
                 ota_received = 0;
                 ota_expected = 0;
@@ -290,13 +310,16 @@ bool http_rest_ota_state(struct fs_file *file, int num_params, char *params[], c
             if (ota_state == OTA_STATE_VERIFIED) {
                 ota_state = OTA_STATE_APPLYING;
                 set_msg("Flashing, reboots in ~10 s");
-                xTaskCreate(ota_apply_task, "OTA Apply", 1024, NULL, configMAX_PRIORITIES - 2, NULL);
+                if (xTaskCreate(ota_apply_task, "OTA Apply", 1024, NULL, configMAX_PRIORITIES - 2, NULL) != pdPASS) {
+                    ota_state = OTA_STATE_ERROR;
+                    set_msg("Unable to start apply task");
+                }
             }
         }
     }
 
     snprintf(json_buffer, sizeof(json_buffer),
-             "%s{\"st\":%d,\"rx\":%lu,\"exp\":%lu,\"crc\":\"%08lx\",\"msg\":\"%s\",\"ver\":\"%s\",\"max\":%lu}",
+             "%s{\"st\":%d,\"rx\":%lu,\"exp\":%lu,\"crc\":\"%08lx\",\"msg\":\"%s\",\"ver\":\"%s\",\"max\":%lu,\"family\":%lu}",
              http_json_header,
              (int) ota_state,
              (unsigned long) ota_received,
@@ -304,7 +327,8 @@ bool http_rest_ota_state(struct fs_file *file, int num_params, char *params[], c
              (unsigned long) ota_crc,
              ota_message,
              ota_running_version(),
-             (unsigned long) OTA_MAX_IMAGE_BYTES);
+             (unsigned long) OTA_MAX_IMAGE_BYTES,
+             (unsigned long) family);
 
     size_t len = strlen(json_buffer);
     file->data = json_buffer; file->len = len; file->index = len;

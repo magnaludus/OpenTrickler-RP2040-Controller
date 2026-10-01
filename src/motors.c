@@ -24,13 +24,6 @@
 #define MAX_RESPONSE_TIME   0.01f   // Maximum response time for PIO stepper
 
 
-// Internal data structure for speed control between tasks
-typedef struct {
-    float new_speed_setpoint;
-    float direction;
-    float ramp_rate;
-} stepper_speed_control_t;
-
 
 // Configurations
 motor_config_t coarse_trickler_motor_config;
@@ -177,16 +170,19 @@ TMC_uart_write_datagram_t *tmc_uart_read (trinamic_motor_t driver, TMC_uart_read
 }
 
 uint32_t speed_to_period(float speed, uint32_t pio_clock_speed, uint32_t full_rotation_steps) {
+    // PIO treats a zero period as stopped. Never convert infinity/NaN to an integer.
+    if (!isfinite(speed) || speed <= 0.0f || full_rotation_steps == 0 || pio_clock_speed == 0) {
+        return 0;
+    }
     // speed: rev/s
     float step_speed = full_rotation_steps * speed;    // in steps/s
-
-    uint32_t full_cycle_count = lroundf(pio_clock_speed / step_speed);
-
+    float cycles = pio_clock_speed / step_speed;
     // Limit by maximum response time
     uint32_t max_response_steps = pio_clock_speed * MAX_RESPONSE_TIME;
-    if (full_cycle_count > max_response_steps){ 
-        full_cycle_count = 0;
+    if (!isfinite(cycles) || cycles > max_response_steps) {
+        return 0;
     }
+    uint32_t full_cycle_count = lroundf(cycles);
 
     // Avoid wrap around
     if (full_cycle_count < STEPPER_LOW_CYCLE_COUNT) {
@@ -376,6 +372,12 @@ bool driver_pio_init(motor_config_t * motor_config) {
     motor_config->pio_config.pio = pio;
     motor_config->pio_config.sm = sm;
 
+    // Claiming resources only loads instruction memory; it does not configure
+    // the state machine or connect STEP to PIO. Start each motor at zero speed.
+    stepper_program_init(pio, sm, offset, motor_config->step_pin);
+    pio_sm_put_blocking(pio, sm, 0);
+    pio_sm_set_enabled(pio, sm, true);
+
     return true;
 }
 
@@ -430,23 +432,25 @@ bool motor_config_save() {
 void speed_ramp(motor_config_t * motor_config, float prev_speed, float new_speed, uint32_t pio_speed) {
     // Calculate ramp param
     float dv = new_speed - prev_speed;
-    float ramp_time_s = fabs(dv / motor_config->persistent_config.angular_acceleration);
+    float acceleration = motor_config->persistent_config.angular_acceleration;
+    if (!isfinite(acceleration) || acceleration <= 0.0f) acceleration = 50.0f;
+    float ramp_time_s = fabs(dv / acceleration);
     uint32_t full_rotation_steps = motor_config->persistent_config.full_steps_per_rotation * motor_config->persistent_config.microsteps;
 
     // Calculate termination condition
     uint32_t ramp_time_us = (uint32_t) (fabs(ramp_time_s) * 1e6);
     uint32_t start_time = time_us_32();
-    uint32_t stop_time = start_time + ramp_time_us;
 
     float current_speed;
     uint32_t current_period;
     while (true) {
         uint32_t current_time = time_us_32();
-        if (current_time > stop_time) {
+        uint32_t elapsed_us = current_time - start_time;
+        if (elapsed_us >= ramp_time_us) {
             break;
         }
 
-        float percentage = (current_time - start_time) / (float) ramp_time_us;
+        float percentage = elapsed_us / (float) ramp_time_us;
 
         current_speed = prev_speed + dv * percentage;
         current_period = speed_to_period(current_speed, pio_speed, full_rotation_steps);
@@ -506,6 +510,7 @@ void stepper_speed_control_task(void * p) {
 
 
 void motor_set_speed(motor_select_t selected_motor, float new_velocity) {
+    if (!isfinite(new_velocity)) new_velocity = 0.0f;
     if (selected_motor == SELECT_COARSE_TRICKLER_MOTOR || selected_motor == SELECT_BOTH_MOTOR) {
         if (coarse_trickler_motor_config.stepper_speed_control_queue) {
             xQueueSend(coarse_trickler_motor_config.stepper_speed_control_queue, &new_velocity, portMAX_DELAY);
@@ -652,8 +657,8 @@ motor_init_err_t motors_init(void) {
     }
 
     // Initialize motor related RTOS control
-    coarse_trickler_motor_config.stepper_speed_control_queue = xQueueCreate(2, sizeof(stepper_speed_control_t));
-    fine_trickler_motor_config.stepper_speed_control_queue = xQueueCreate(2, sizeof(stepper_speed_control_t));
+    coarse_trickler_motor_config.stepper_speed_control_queue = xQueueCreate(2, sizeof(float));
+    fine_trickler_motor_config.stepper_speed_control_queue = xQueueCreate(2, sizeof(float));
 
     // Create one task for each stepper controller
     xTaskCreate(stepper_speed_control_task, 

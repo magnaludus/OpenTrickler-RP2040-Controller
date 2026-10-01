@@ -1792,10 +1792,10 @@
     function _fwProgress(pct) { document.getElementById("fwProgress").value = pct; }
 
     // Turn a .uf2 into the raw flash image. Returns a Uint8Array starting at 0x10000000.
-    function uf2ToImage(buf) {
+    function uf2ToImage(buf, expectedFamily, maxImageBytes) {
         const dv = new DataView(buf);
-        if (buf.byteLength % 512 != 0 || dv.getUint32(0, true) != UF2_MAGIC0) {
-            return new Uint8Array(buf);   // not a uf2, treat as raw .bin
+        if (buf.byteLength == 0 || buf.byteLength % 512 != 0 || dv.getUint32(0, true) != UF2_MAGIC0) {
+            throw new Error("Select a valid .uf2 file");
         }
         let blocks = [];
         for (let off = 0; off + 512 <= buf.byteLength; off += 512) {
@@ -1808,17 +1808,25 @@
             const family = dv.getUint32(off + 28, true);
             const hasFamily = (flags & 0x2000) != 0;
             if (hasFamily && family != RP2350_ARM_S && family != RP2040_FAMILY) continue;   // skip the absolute marker block
-            if (family == RP2040_FAMILY) throw new Error("That is a Pico W (RP2040) image, this board is a Pico 2 W");
+            if (!hasFamily || family != expectedFamily) throw new Error("Firmware is for a different board");
+            if ((flags & 1) != 0) continue;   // block is not intended for main flash
+            if (size == 0 || size > 476) throw new Error("Invalid UF2 payload size");
             if (addr < FLASH_BASE) continue;
+            if (addr + size > FLASH_BASE + maxImageBytes) throw new Error("Image exceeds this board's update capacity");
             blocks.push({ addr: addr, data: new Uint8Array(buf, off + 32, size) });
         }
-        if (blocks.length == 0) throw new Error("No RP2350 flash blocks in this file");
+        if (blocks.length == 0) throw new Error("No firmware flash blocks in this file");
         blocks.sort((a, b) => a.addr - b.addr);
         if (blocks[0].addr != FLASH_BASE) throw new Error("Image does not start at the flash base");
         const last = blocks[blocks.length - 1];
         const total = last.addr + last.data.length - FLASH_BASE;
         const img = new Uint8Array(total).fill(0xFF);
-        for (const b of blocks) img.set(b.data, b.addr - FLASH_BASE);
+        let previousEnd = FLASH_BASE;
+        for (const b of blocks) {
+            if (b.addr < previousEnd) throw new Error("Overlapping UF2 flash blocks");
+            img.set(b.data, b.addr - FLASH_BASE);
+            previousEnd = b.addr + b.data.length;
+        }
         return img;
     }
 
@@ -1841,7 +1849,9 @@
         try {
             _fwStatus("Reading file");
             const buf = await input.files[0].arrayBuffer();
-            const img = uf2ToImage(buf);
+            const board = await (await fetch("/rest/ota_state", { cache: "no-store" })).json();
+            if (![RP2040_FAMILY, RP2350_ARM_S].includes(board["family"])) throw new Error("Board type unavailable; use USB BOOTSEL to update");
+            const img = uf2ToImage(buf, board["family"], board["max"]);
             const crc = crc32(img).toString(16).padStart(8, "0");
             _fwStatus(`Image ${(img.length / 1024).toFixed(0)} KB, crc ${crc}. Uploading`);
             _fwProgress(10);
@@ -1859,7 +1869,8 @@
             _fwProgress(80);
 
             _fwStatus("Flashing. Do not power off. Reboots in about 10 s");
-            await fetch("/rest/ota_state?a0=apply");
+            const applied = await (await fetch("/rest/ota_state?a0=apply")).json();
+            if (applied["st"] != 4) throw new Error("Apply failed: " + applied["msg"]);
             _fwProgress(90);
 
             // Wait for it to come back

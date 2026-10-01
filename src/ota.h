@@ -3,14 +3,15 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "pico.h"
 #include "http_rest.h"
 
 // Firmware update over WiFi.
 // The portal parses the .uf2, POSTs the raw image to /ota/upload, the image is staged in the top half of
 // flash, verified by CRC32, then copied over the running image from RAM and the board reboots.
 
-#define OTA_STAGE_OFFSET        (2u * 1024u * 1024u)                    // staging area starts 2 MB into flash
-#define OTA_MAX_IMAGE_BYTES     (1536u * 1024u)                         // room for a 1.5 MB image
+#define OTA_STAGE_OFFSET        (PICO_FLASH_SIZE_BYTES / 2u)
+#define OTA_MAX_IMAGE_BYTES     ((OTA_STAGE_OFFSET < (1536u * 1024u)) ? OTA_STAGE_OFFSET : (1536u * 1024u))
 #define OTA_SECTOR_BYTES        4096u
 
 typedef enum {

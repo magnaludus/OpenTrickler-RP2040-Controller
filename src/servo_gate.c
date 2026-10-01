@@ -127,13 +127,13 @@ void servo_gate_control_task(void *p) {
                     _servo_gate_set_current_state(new_open_ratio);
                 } else {
                     uint32_t start_time = time_us_32();
-                    uint32_t stop_time  = start_time + ramp_time_us;
 
                     while (true) {
                         uint32_t current_time = time_us_32();
-                        if (current_time > stop_time) break;
+                        uint32_t elapsed_us = current_time - start_time;
+                        if (elapsed_us >= ramp_time_us) break;
 
-                        float percentage = (current_time - start_time) / (float)ramp_time_us;
+                        float percentage = elapsed_us / (float)ramp_time_us;
                         float current_ratio = prev_open_ratio + delta * percentage;
 
                         _servo_gate_set_current_state(current_ratio);
