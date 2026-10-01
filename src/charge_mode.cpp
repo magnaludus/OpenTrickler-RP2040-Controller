@@ -141,7 +141,12 @@ static rgbw_u32_t session_backlight(void) {
 // ---------------------------------------------------------------------------
 #define LEARN_ERR_WINDOW    12      // throws of error history used to judge the real margin
 #define LEARN_ERR_MIN_N     8       // sample count before that judgement is worth acting on
-#define LEARN_LAND_STEP     1.15f   // most the landing speed may move in one adjustment
+#define LEARN_LAND_STEP     1.25f   // most the landing speed may move in one adjustment
+#define LEARN_LAND_EVERY    4       // passes between landing speed adjustments
+#define LEARN_LAND_UP_LIMIT 2.00f   // landing speed may rise further above the fit than other knobs
+#define LEARN_TRIM_GAIN     0.15f   // share of the measured bias taken out per throw
+#define LEARN_TRIM_LIMIT    0.50f   // aim point trim limit, as a fraction of the bracket
+#define HANDOFF_MAX_FRAC    0.50f   // the bulk always carries at least this share of the charge
 
 extern "C" float learn_mode_get_land_sigma(void);
 
@@ -168,6 +173,11 @@ typedef struct {
     float err_window[LEARN_ERR_WINDOW];
     uint8_t err_count;
     uint8_t err_next;
+
+    // Aim point correction in grains, added to the target the fine tube aims at. Learned from the
+    // mean of the window above. RAM only, like everything else this tuner does.
+    float landing_trim_gr;
+    uint8_t land_pass_tick;     // passes since the landing speed was last re-judged
 } learn_state_t;
 
 static learn_state_t learn_state[MAX_PROFILE_CNT];
@@ -181,8 +191,48 @@ void charge_mode_learn_set_suppressed(bool suppressed) {
     learn_tuning_suppressed = suppressed;
 }
 
+// Learned landing trim for the profile in use. The charge loop ends the throw as soon as the raw
+// reading is inside the bracket below target, so a landing can finish anywhere in that window but
+// can never be pulled back from above it: the results sit low rather than centred. On tested
+// hardware that was a mean of -0.030 gr against a 0.060 gr bracket - half the bracket spent on
+// nothing. Shifting the fine tube's aim point by the bias the throws actually show centres the
+// spread, so both edges of the bracket come back into play. Zero when Learn is off, and during
+// Learn Powder's confirmation throws, which measure the fitted profile as it stands.
+static float learn_landing_trim(void) {
+    if (!charge_mode_config.eeprom_charge_mode_data.learn_enable) return 0.0f;
+    if (learn_tuning_suppressed) return 0.0f;
+    extern eeprom_profile_data_t profile_data;
+    uint8_t idx = (uint8_t) profile_data.current_profile_idx;
+    if (idx >= MAX_PROFILE_CNT) return 0.0f;
+    return learn_state[idx].landing_trim_gr;
+}
+
+// The handoff can never be allowed to swallow the charge. At or above the target, the coarse target
+// works out to zero, the coarse stop fires on the very first reading, and the fine tube delivers
+// the whole charge on its own - roughly twice as slow, and the only sign is coarse_s logging 0.00.
+// That happened on hardware: a handoff fitted or tuned at one charge weight carried over to a
+// lighter one. Capped where it is used, so no stored value can idle the bulk.
+static float handoff_for_target(float target) {
+    float handoff = charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold;
+    float cap = HANDOFF_MAX_FRAC * target;
+    if (cap > 0.0f && handoff > cap) handoff = cap;
+    if (handoff < 0.0f) handoff = 0.0f;
+    return handoff;
+}
+
 #define LEARN_UP_LIMIT      1.40f
 #define LEARN_DOWN_LIMIT    0.50f
+
+// The landing speed gets its own, wider ceiling. It is the one knob tuned from a measured margin
+// rather than a streak, so it can be trusted further - and the fit sizes it conservatively, so a
+// 1.4x ceiling left most of the speed the bracket allowed unreachable.
+static float learn_bound_land(float value, float base) {
+    float lo = base * LEARN_DOWN_LIMIT;
+    float hi = base * LEARN_LAND_UP_LIMIT;
+    if (value < lo) value = lo;
+    if (value > hi) value = hi;
+    return value;
+}
 
 static float learn_bound(float value, float base, float motor_cap) {
     float lo = base * LEARN_DOWN_LIMIT;
@@ -235,12 +285,37 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
         st->clean_streak = 0;
         st->err_count = 0;
         st->err_next = 0;
+        st->landing_trim_gr = 0.0f;
+        st->land_pass_tick = 0;
     }
 
     // Record every throw, not just the clean ones - the spread has to include the misses.
     st->err_window[st->err_next] = error_gr;
     st->err_next = (uint8_t)((st->err_next + 1) % LEARN_ERR_WINDOW);
     if (st->err_count < LEARN_ERR_WINDOW) st->err_count += 1;
+
+    bool have_stats = (st->err_count >= LEARN_ERR_MIN_N && bracket > 0.0f);
+    float err_mean = 0.0f, err_sd = 0.0f;
+    if (have_stats) {
+        double sum = 0.0, sum_sq = 0.0;
+        for (uint8_t i = 0; i < st->err_count; i += 1) {
+            double v = st->err_window[i];
+            sum += v;
+            sum_sq += v * v;
+        }
+        double mean = sum / st->err_count;
+        double var = (sum_sq - st->err_count * mean * mean) / (st->err_count - 1);
+        err_mean = (float) mean;
+        err_sd = (var > 0.0) ? (float) sqrt(var) : 0.0f;
+
+        // Aim point: steer the window's mean to zero. Clamped to half a bracket, so even a wildly
+        // wrong mean cannot put the aim point outside the pass window.
+        float limit = LEARN_TRIM_LIMIT * bracket;
+        float trim = st->landing_trim_gr - LEARN_TRIM_GAIN * err_mean;
+        if (trim > limit) trim = limit;
+        if (trim < -limit) trim = -limit;
+        st->landing_trim_gr = trim;
+    }
 
     float fine_motor_cap = get_motor_max_speed(SELECT_FINE_TRICKLER_MOTOR);
     float coarse_motor_cap = get_motor_max_speed(SELECT_COARSE_TRICKLER_MOTOR);
@@ -249,7 +324,7 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     // Where the bulk actually handed off, measured against where it was meant to. Compared on the
     // predicted weight, since that is what the coarse stop decision is made on. Comparing the raw
     // reading here would blame the fine tube for every over, because the reading always trails.
-    float handoff_target = charge_mode_config.target_charge_weight - handoff;
+    float handoff_target = charge_mode_config.target_charge_weight - handoff_for_target(charge_mode_config.target_charge_weight);
     float coarse_over = coarse_stop_predicted - handoff_target;
     bool coarse_ran_long = (coarse_over > 0.25f * handoff);
 
@@ -261,12 +336,12 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
         if (coarse_ran_long) {
             // Bulk carried past the handoff. Slow it and give the prediction more room to work in.
             profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 0.92f, st->base_coarse_max, coarse_motor_cap);
-            float wider = fminf(handoff * 1.15f, 0.5f * charge_mode_config.target_charge_weight);
+            float wider = fminf(handoff * 1.15f, HANDOFF_MAX_FRAC * charge_mode_config.target_charge_weight);
             charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = learn_bound(wider, st->base_handoff, 0.0f);
         }
         else {
             // The fine tube landed hot. Slow the landing and start the ramp earlier.
-            profile->fine_min_flow_speed_rps = learn_bound(profile->fine_min_flow_speed_rps * 0.85f, st->base_fine_min, 0.0f);
+            profile->fine_min_flow_speed_rps = learn_bound_land(profile->fine_min_flow_speed_rps * 0.85f, st->base_fine_min);
             profile->fine_max_flow_speed_rps = learn_bound(profile->fine_max_flow_speed_rps * 0.92f, st->base_fine_max, fine_motor_cap);
             float new_taper = taper * 1.20f;
             if (new_taper > 0.0f) {
@@ -276,46 +351,44 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     }
     else if (result == THROW_RESULT_PASS) {
         st->clean_streak += 1;
-        // Five clean in a row: buy back some time from whichever phase is costing the most
-        if (st->clean_streak >= 5) {
-            st->clean_streak = 0;
 
-            // Landing speed, from measured evidence. The fine phase costs roughly
-            // 3 x fine_lag x (ln(fine max / fine min) + 1) seconds, so the landing speed is the
-            // dominant term in how long a throw takes - and until now tuning could only ever slow
-            // it down (x0.85 on an over) and never bring it back. That ratchets one way: every
-            // over cost time permanently and no amount of good behaviour bought it back.
-            //
-            // Landing error scales linearly with landing speed (halving the speed halved the
-            // measured spread exactly on tested hardware), so the adjustment is a direct ratio.
-            // The fit sizes this from the Learn run's lag spread, measured over a few throws at
-            // speeds the tube never lands at, and that runs conservative - asking for 2 sigma of
-            // margin produced 2.6 in practice. Real throws are the better evidence, so steer the
-            // landing speed until the observed margin matches what was actually asked for.
-            if (st->err_count >= LEARN_ERR_MIN_N && bracket > 0.0f) {
-                double sum = 0.0, sum_sq = 0.0;
-                for (uint8_t i = 0; i < st->err_count; i += 1) {
-                    double v = st->err_window[i];
-                    sum += v;
-                    sum_sq += v * v;
-                }
-                double mean = sum / st->err_count;
-                double var = (sum_sq - st->err_count * mean * mean) / (st->err_count - 1);
-                float sd = (var > 0.0) ? (float) sqrt(var) : 0.0f;
-
+        // Landing speed, from measured evidence, every few passes rather than only after a clean
+        // streak - it works from the 12-throw window, misses included, so it doesn't need the
+        // streak to vouch for it, and gating it there meant ~50 throws to converge.
+        //
+        // The fine phase costs roughly 3 x fine_lag x (ln(fine max / fine min) + 1) seconds, so the
+        // landing speed is the dominant term in how long a throw takes. Landing error scales
+        // linearly with landing speed (halving the speed halved the measured spread on tested
+        // hardware), so the adjustment is a direct ratio: steer the landing speed until the observed
+        // margin matches land_sigma.
+        //
+        // Margin is measured to the nearer edge of the bracket, not to the target. A spread that
+        // sits low is already part way to a miss; judging it on bracket / sd alone read 2.16 sigma
+        // on hardware where the real distance to the low edge was 1.09. The trim above pulls the
+        // mean back to zero, and then the two agree - which is what frees the margin to spend.
+        if (have_stats) {
+            st->land_pass_tick += 1;
+            if (st->land_pass_tick >= LEARN_LAND_EVERY) {
+                st->land_pass_tick = 0;
                 float target_sigma = learn_mode_get_land_sigma();
-                if (sd > 1e-4f && target_sigma > 0.0f) {
-                    float measured_sigma = bracket / sd;
-                    float ratio = measured_sigma / target_sigma;
+                float reach = bracket - fabsf(err_mean);
+                if (reach < 0.0f) reach = 0.0f;
+                if (err_sd > 1e-4f && target_sigma > 0.0f) {
+                    float ratio = (reach / err_sd) / target_sigma;
                     // Only act on a clear difference, and never more than one step at a time.
                     if (ratio > 1.10f || ratio < 0.90f) {
                         if (ratio > LEARN_LAND_STEP) ratio = LEARN_LAND_STEP;
                         if (ratio < 1.0f / LEARN_LAND_STEP) ratio = 1.0f / LEARN_LAND_STEP;
                         profile->fine_min_flow_speed_rps =
-                            learn_bound(profile->fine_min_flow_speed_rps * ratio, st->base_fine_min, 0.0f);
+                            learn_bound_land(profile->fine_min_flow_speed_rps * ratio, st->base_fine_min);
                     }
                 }
             }
+        }
+
+        // Five clean in a row: buy back some time from whichever phase is costing the most
+        if (st->clean_streak >= 5) {
+            st->clean_streak = 0;
 
             if (coarse_s >= fine_s) {
                 profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 1.06f, st->base_coarse_max, coarse_motor_cap);
@@ -325,13 +398,18 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
                 // Floored by the coarse tube's own measured spread from the Learn fit (3 sigma) so a
                 // run of clean throws can't ratchet the margin down past what the coarse tube's
                 // natural variance needs - a streak of 5 is not proof the setting is safe, just that
-                // it hasn't failed yet. Both floors sit deliberately below what the fit hands over:
-                // the fit sizes the handoff at LEARN_COARSE_STOP_SAFETY (1.5) x that 3 sigma and at
-                // a full taper width, so leaving live tuning the same two numbers would pin it at
-                // the fitted value and it could never tighten at all. Repeated clean throws are real
-                // evidence, so they may spend the fit's safety factor - but not the 3 sigma itself.
+                // it hasn't failed yet. Clean throws may spend the fit's safety factor, not the
+                // 3 sigma itself.
+                //
+                // The floor is a stop, never a set point: this branch only ever narrows. It used to
+                // take fmaxf(handoff x 0.95, floor), and with a floor tied to the taper width (which
+                // only ever grows - an over widens it, a clean streak holds it) that *raised* the
+                // handoff on clean throws. The taper is no longer a floor at all: below it the fine
+                // simply picks up part way down its ramp, which the prediction already covers.
+                // Widening is the over branch's job, on evidence.
                 float sd_floor = 3.0f * charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr;
-                float tighter = fmaxf(handoff * 0.95f, fmaxf(taper * 0.75f, sd_floor));
+                float tighter = handoff * 0.95f;
+                if (tighter < sd_floor) tighter = fminf(handoff, sd_floor);
                 charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = learn_bound(tighter, st->base_handoff, 0.0f);
                 if (fine_s > 3.0f) {
                     float old_max = profile->fine_max_flow_speed_rps;
@@ -358,6 +436,10 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     }
     if (charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold < 0.30f) {
         charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = 0.30f;
+    }
+    float handoff_cap = HANDOFF_MAX_FRAC * charge_mode_config.target_charge_weight;
+    if (handoff_cap > 0.30f && charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold > handoff_cap) {
+        charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = handoff_cap;
     }
 
     // Remember the values as they stand now, after every clamp. Next throw compares against these to
@@ -627,7 +709,10 @@ void charge_mode_wait_for_complete() {
 
     // Calculate target weight for coarse trickler
     // The coarse trickler is suppose to stop ahead of the target weight by an offset
-    float coarse_trickler_target_charge_weight = fmaxf(0.0f, charge_mode_config.target_charge_weight - charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold);
+    float coarse_trickler_target_charge_weight = fmaxf(0.0f, charge_mode_config.target_charge_weight - handoff_for_target(charge_mode_config.target_charge_weight));
+
+    // Where the fine tube aims: the target, plus whatever landing bias live tuning has learned
+    float fine_aim_weight = charge_mode_config.target_charge_weight + learn_landing_trim();
 
     TickType_t last_sample_tick = xTaskGetTickCount();
     TickType_t current_sample_tick = last_sample_tick;
@@ -702,8 +787,10 @@ void charge_mode_wait_for_complete() {
 
         // Motor decisions run on the predicted weight, the stop decision on the real reading
         float coarse_trickler_error = coarse_trickler_target_charge_weight - predicted_weight;
-        float fine_trickler_error = charge_mode_config.target_charge_weight - predicted_weight;
-        float fine_reading_error = charge_mode_config.target_charge_weight - current_weight;
+        // Both use the trimmed aim point. Trimming only the motor's aim would be undone by the stop
+        // check, which would still end the throw at the untrimmed edge.
+        float fine_trickler_error = fine_aim_weight - predicted_weight;
+        float fine_reading_error = fine_aim_weight - current_weight;
 
         // Fine & Coarse trickler stop condition
         if (fine_reading_error < fine_stop_threshold) {
@@ -850,6 +937,7 @@ static bool charge_mode_top_up(float bracket) {
     if (speed <= 0.0f) speed = 0.1f;
 
     snprintf(title_string, sizeof(title_string), "Top Up");
+    float aim = charge_mode_config.target_charge_weight + learn_landing_trim();
     TickType_t start = xTaskGetTickCount();
     TickType_t deadline = start + pdMS_TO_TICKS(15000);
     motor_set_speed(SELECT_FINE_TRICKLER_MOTOR, speed);
@@ -865,7 +953,7 @@ static bool charge_mode_top_up(float bracket) {
         if (xTaskGetTickCount() > deadline) break;
         float m;
         if (!scale_block_wait_for_next_measurement(200, &m)) continue;
-        if (charge_mode_config.target_charge_weight - m < bracket + 0.0005f) break;
+        if (aim - m < bracket + 0.0005f) break;
     }
     motor_set_speed(SELECT_FINE_TRICKLER_MOTOR, 0);
     last_charge_elapsed_seconds += (float)((xTaskGetTickCount() - start) * portTICK_PERIOD_MS) / 1000.0f;

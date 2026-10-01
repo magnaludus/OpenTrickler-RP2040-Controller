@@ -1426,8 +1426,13 @@
     }
 
     // Function to poll charge mode status (weight, progress, etc)
+    // The next poll is only scheduled once this one finishes, so a request the device never answers
+    // (Wi-Fi drops a packet, the device is busy) used to freeze the live display for good. Give up
+    // after 3 seconds and let the next poll try again.
     function pollChargeModeStatus() {
-        fetch("/rest/charge_mode_state")
+        const ctrl = new AbortController();
+        const abortTimer = setTimeout(() => ctrl.abort(), 3000);
+        fetch("/rest/charge_mode_state", { signal: ctrl.signal, cache: "no-store" })
         .then(response => {
             return response.json()
         })
@@ -1516,6 +1521,7 @@
             _setChargeModeStateWidget(ChargeModeState.WAIT);
         })
         .finally(() => {
+            clearTimeout(abortTimer);
             // Schedule the next event
             clearTimeout(pollSetTimeoutId);
             pollSetTimeoutId = setTimeout(pollChargeModeStatus, 500);

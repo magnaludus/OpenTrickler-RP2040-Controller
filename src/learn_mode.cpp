@@ -697,12 +697,15 @@ static void fit_profile(void) {
             if (cmax < c_motor_min) continue;
             float coarse_flow = r->coarse_k * cmax;
 
-            // Handoff has to cover the coarse stop scatter at this bulk speed, with a margin, and be
-            // wide enough that the fine can run its ramp. Below the taper the fine simply hands off
-            // part way down the ramp, which costs nothing, so the taper is a floor at 1x not 1.5x.
+            // Handoff has to cover the coarse stop scatter at this bulk speed, with a margin. That is
+            // the only floor. It used to be floored at the taper width as well, but below the taper
+            // the fine simply picks up part way down its ramp - it was already running during the
+            // bulk, and the prediction already counts what is in the air - so the taper floor bought
+            // no safety and cost seconds: the taper is ~3 x lag x fine flow, several grains on a
+            // fast fine tube, and every one of those grains went through the fine tube instead of
+            // the bulk. predict_throw handles a handoff inside the taper.
             float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
                                   coarse_margin_mult * 3.0f * coarse_flow * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
-            if (handoff < taper) handoff = taper;
             if (handoff >= 0.5f * target) continue;  // bulk has to carry at least half the charge
 
             float cs, fs;
@@ -745,7 +748,8 @@ static void fit_profile(void) {
         best_fmin = fmin_lo;
         best_f = fmaxf(fmin_lo, f_hi / (float) LEARN_SEARCH_STEPS);
         best_taper = fmaxf(LEARN_FINE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->fine_lag_s * r->fine_k * best_f);
-        best_handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR, best_taper);
+        best_handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
+                             coarse_margin_mult * 3.0f * r->coarse_k * best_c * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
         predict_throw(target, r->coarse_k * best_c, r->fine_k * best_f, r->fine_k * best_fmin,
                       best_f, best_fmin, r->dead_time_s, best_handoff, best_taper, &best_cs, &best_fs);
         best_total = best_cs + best_fs;

@@ -747,3 +747,29 @@ cmake --build build
 
 Output firmware is `build/app.uf2`. Flash either via USB (BOOTSEL) or over
 WiFi through Settings > Firmware in the web portal.
+
+## Handoff swallowing the charge, taper floor, landing trim (post v2.21)
+
+- **`coarse_s = 0.00` was real, not a logging bug.** It means the coarse stop fired on the first
+  reading: `coarse_stop_threshold >= target` gives a coarse target of zero, so the fine tube delivers
+  the whole charge alone (~10 s at 26.5 gr, session 2026-10-01 throws 1-10). The handoff is global,
+  so a value fitted or tuned at one charge weight carries over to a lighter one. Now capped at
+  0.5 x target where it is used (`handoff_for_target()`) and after every live-tuning write.
+- **Live "tighten" could raise the handoff.** It took `fmaxf(handoff*0.95, fmaxf(taper*0.75, sd_floor))`;
+  the taper only ever grows (an over widens it x1.2, a clean streak holds it), so this ratcheted
+  the handoff up. It now only ever narrows, floored on 3 sigma coarse scatter alone.
+- **Taper floor on the handoff removed from the fit.** taper = 3 x fine_lag x fine flow is several
+  grains on a fast fine tube, and every grain of it went through the fine tube. Below the taper
+  the fine just picks up part way down its ramp; prediction already covers what is in the air.
+  The only handoff floor is coarse stop scatter x safety factor. Re-run Learn Powder to benefit.
+- **Learned landing trim.** The loop ends a throw as soon as the reading is inside the bracket
+  below target, so results sit low (mean -0.030 against a 0.060 bracket). `landing_trim_gr`
+  (RAM, per profile) steers the 12-throw mean to zero, gain 0.15, clamped to +/-0.5 x bracket.
+  Applied to both the fine PID aim and the stop check, and to top-up. Zero when Learn is off or
+  suppressed (confirm throws). Simulated: miss rate 13.8% -> 3.6% on a Gaussian at that bias.
+- **Landing-speed margin is measured to the nearer bracket edge**: (bracket - |mean|) / sd, not
+  bracket / sd (which read 2.16 sigma where the real distance to the low edge was 1.09). Runs every
+  4 passes instead of only after a 5-clean streak; step 1.25 (was 1.15); fine_min ceiling 2.0x
+  the fit (was 1.4x).
+- **Portal:** the live-status poll had no timeout, and the next poll is only scheduled once the
+  previous one settles, so one unanswered request froze the display. 3 s AbortController added.
