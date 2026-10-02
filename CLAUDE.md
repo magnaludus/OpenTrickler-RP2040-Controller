@@ -29,7 +29,7 @@ decided is already in the code.
   throw (coarse 1.85 s, fine 9.5 s). The handoff was pinned at the 13.25 gr cap because the fit
   sized it on stop scatter at full bulk speed. The taper fixes that in a fresh Learn fit only.
 
-**Merged after v2.3 (2026-10-01, v2.3.5, from branch `tuner-v2`)**
+**Released as v2.4 (2026-10-02): rebuilt tuner + Learn Style, from branch `tuner-v2`**
 - The live tuner is rebuilt (`src/learn_tuner.c`, pure C, host-simulated; see "Live tuner rebuilt"),
   and Learn has a **Style** setting (Normal / Aggressive, see "Learn Style"). First hardware result:
   Aggressive ~22% faster than Normal (8.1 s vs 10.3 s per charge), small sample, 0 misses in 10.
