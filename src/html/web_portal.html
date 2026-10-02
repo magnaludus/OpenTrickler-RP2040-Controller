@@ -1721,7 +1721,7 @@
                 lagWarn.style.display = "none";
             }
             document.getElementById("lrCst").innerText = Number(d["cst"]).toFixed(3) + " gr";
-            document.getElementById("lrCkp").innerText = Number(d["ckp"]).toFixed(3);
+            document.getElementById("lrCkp").innerText = Number(d["ckp"]).toFixed(3) + " / " + Number(d["ctw"]).toFixed(2) + " gr";
             document.getElementById("lrFk").innerText = Number(d["fk"]).toFixed(4) + " gr/s per rps";
             document.getElementById("lrFmax").innerText = Number(d["fmax"]).toFixed(2) + " / " + Number(d["fmin"]).toFixed(2);
             document.getElementById("lrFtail").innerText = Number(d["ft"]).toFixed(3) + " gr, sd " + Number(d["fts"]).toFixed(3);

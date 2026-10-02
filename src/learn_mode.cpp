@@ -82,6 +82,8 @@ static float max_settled_fine = 0.0f;
 #define LEARN_BRACKET_USE_FRAC          0.80f   // fine landing error has to fit in this much of the bracket
 #define LEARN_SEARCH_STEPS              12
 #define LEARN_LAND_STEPS                6       // landing speeds tried, slowest (most accurate) first
+#define LEARN_COARSE_LAND_STEPS         6       // coarse landing speeds tried per bulk speed, slowest first
+#define LEARN_COARSE_TAPER_MIN_GR       0.50f   // shortest coarse taper window
 #define LEARN_FINE_LAND_FLOW_GPS        0.06f   // fine tube landing flow, a couple of kernels a second
 #define LEARN_PREDICT_STOP_MARGIN_GR    0.30f
 #define LEARN_COARSE_FLOW_CAP_GPS       18.0f   // no point characterising a bulk rate faster than this
@@ -546,16 +548,39 @@ static void lag_stats(float * mean_out, float * sd_out, float * coarse_out, floa
 
 
 // Predict a throw at the confirm target.
-// Bulk: both tubes running until the coarse hands off. Fine: full speed down to the taper window,
+// Bulk: both tubes running, the coarse flat out until its taper window, then ramping down to its
+// landing speed so it is crawling when its stop fires. Fine: full speed down to the taper window,
 // then an exponential approach through the window to the landing speed.
-static void predict_throw(float target, float coarse_flow, float fine_flow_max, float fine_flow_min,
+static void predict_throw(float target, float coarse_flow, float coarse_land_flow, float coarse_taper_gr,
+                          float fine_flow_max, float fine_flow_min,
                           float fmax_rps, float fmin_rps, float dead_time_s,
                           float handoff, float taper_gr, float * coarse_s, float * fine_s) {
-    float bulk_rate = coarse_flow + fine_flow_max;
     float bulk_gr = fmaxf(0.0f, target - handoff);
     // Dead time is motor start to first movement on the scale. It is charged once, at the front of
     // the throw, and it is real - leaving it out made every prediction optimistic by most of a second.
-    *coarse_s = ((bulk_rate > 0.0f) ? bulk_gr / bulk_rate : 999.0f) + dead_time_s;
+    float tc = dead_time_s;
+    if (coarse_flow > 0.0f && coarse_taper_gr > 0.0f) {
+        // Flat out until the window, both tubes adding.
+        float window = fminf(bulk_gr, coarse_taper_gr);
+        tc += (bulk_gr - window) / (coarse_flow + fine_flow_max);
+
+        // Inside the window the coarse speed is proportional to the remaining error (coarse_kp =
+        // cmax / window) down to its landing speed, while the fine keeps adding at its full rate:
+        //   de/dt = -(a e + F)   with a = coarse flow / window, F = fine flow
+        //   e(t)  = (e0 + F/a) exp(-a t) - F/a
+        // The coarse reaches its landing speed at e_land = window x (land flow / max flow); from
+        // there both tubes run at a constant rate to the stop.
+        float a = coarse_flow / coarse_taper_gr;
+        float e_land = fminf(window, coarse_taper_gr * (coarse_land_flow / coarse_flow));
+        float fa = fine_flow_max / a;
+        if (window > e_land) tc += logf((window + fa) / (e_land + fa)) / a;
+        float land_rate = coarse_land_flow + fine_flow_max;
+        tc += (land_rate > 0.0f) ? e_land / land_rate : 999.0f;
+    }
+    else {
+        tc = 999.0f;
+    }
+    *coarse_s = tc;
 
     // Above the taper window the fine tube is flat out.
     float full_gr = fmaxf(0.0f, handoff - taper_gr);
@@ -669,6 +694,18 @@ static void fit_profile(void) {
     if (c_measured_max > 0.0f) c_hi = fminf(c_hi, c_measured_max * LEARN_COARSE_EXTRAP_MULT);
     if (c_hi < c_motor_min) c_hi = c_motor_min;
 
+    // The coarse landing speed may go no lower than the slowest rung the ladder actually ran
+    // (20% of the top flow). Below that the flow per rps is extrapolated and a coarse tube gets
+    // lumpy, so the stop scatter would no longer be the flow x lag figure the handoff is built on.
+    float c_measured_min = 0.0f;
+    for (int i = 0; i < LEARN_THROWS_PER_PHASE; i += 1) {
+        if (learn_mode.coarse[i].time_s > 0.0f &&
+            (c_measured_min <= 0.0f || learn_mode.coarse[i].speed_rps < c_measured_min)) {
+            c_measured_min = learn_mode.coarse[i].speed_rps;
+        }
+    }
+    float c_land_lo = fmaxf(c_motor_min, c_measured_min);
+
     // Sweep both tubes. Running the fine flat out is close to free in time but expensive in handoff:
     // the taper window scales with fine flow, so the fine phase takes about the same number of
     // seconds at any fine speed (taper / mean taper rate ~ 6 x lag either way) while the handoff it
@@ -680,14 +717,14 @@ static void fit_profile(void) {
     // bulk as much of the charge as it can, i.e. the smallest handoff, and the time goal is what
     // holds that back. Take the tightest handoff that still makes the goal, fastest on a tie. Only
     // if nothing makes the goal does the fastest throw win instead.
-    float best_c = c_motor_min, best_f = fmin_lo, best_fmin = fmin_lo;
-    float best_handoff = 0.0f, best_taper = LEARN_FINE_TAPER_MIN_GR;
+    float best_c = c_motor_min, best_f = fmin_lo, best_fmin = fmin_lo, best_cland = c_land_lo;
+    float best_handoff = 0.0f, best_taper = LEARN_FINE_TAPER_MIN_GR, best_ctaper = LEARN_COARSE_TAPER_MIN_GR;
     float best_cs = 0.0f, best_fs = 0.0f, best_total = 1e9f;
     bool found = false;
 
     // Fallback for when no combination meets the time goal: the fastest throw on the grid.
-    float fb_c = c_motor_min, fb_f = fmin_lo, fb_fmin = fmin_lo;
-    float fb_handoff = 0.0f, fb_taper = LEARN_FINE_TAPER_MIN_GR;
+    float fb_c = c_motor_min, fb_f = fmin_lo, fb_fmin = fmin_lo, fb_cland = c_land_lo;
+    float fb_handoff = 0.0f, fb_taper = LEARN_FINE_TAPER_MIN_GR, fb_ctaper = LEARN_COARSE_TAPER_MIN_GR;
     float fb_cs = 0.0f, fb_fs = 0.0f, fb_total = 1e9f;
 
   for (int li = 0; li < LEARN_LAND_STEPS; li += 1) {
@@ -713,47 +750,68 @@ static void fit_profile(void) {
             if (cmax < c_motor_min) continue;
             float coarse_flow = r->coarse_k * cmax;
 
-            // Handoff has to cover the coarse stop scatter at this bulk speed, with a margin. That is
-            // the only floor. It used to be floored at the taper width as well, but below the taper
-            // the fine simply picks up part way down its ramp - it was already running during the
-            // bulk, and the prediction already counts what is in the air - so the taper floor bought
-            // no safety and cost seconds: the taper is ~3 x lag x fine flow, several grains on a
-            // fast fine tube, and every one of those grains went through the fine tube instead of
-            // the bulk. predict_throw handles a handoff inside the taper.
-            float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
-                                  coarse_margin_mult * 3.0f * coarse_flow * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
-            if (handoff >= 0.5f * target) continue;  // bulk has to carry at least half the charge
+            // Coarse taper window: the coarse ramps from full speed down to its landing speed over
+            // this much before its stop point, sized like the fine taper on what is in the air at
+            // full speed. The coarse Kp is cmax / window.
+            float ctaper = fmaxf(LEARN_COARSE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->coarse_lag_s * coarse_flow);
 
-            float cs, fs;
-            predict_throw(target, coarse_flow, fine_flow_max, fine_flow_min, fmax, fmin,
-                          r->dead_time_s, handoff, taper, &cs, &fs);
-            float total = cs + fs;
+            // The handoff used to be built on the stop scatter at full bulk speed, 3 x flow x lag
+            // spread x safety. That ties the handoff to the bulk rate: on tested hardware a bulk
+            // near 8 gr/s demanded a half-charge handoff, and 13 grains went through the fine tube
+            // at 1.4 gr/s - nine seconds of fine for two of bulk. Running the coarse flat out and
+            // stopping it flat out is the expensive choice; letting it crawl for the last grain
+            // or two costs a second and shrinks the scatter, and the handoff with it, by the ratio
+            // of the two speeds. So the landing speed is swept too, slowest first.
+            for (int cl = 0; cl < LEARN_COARSE_LAND_STEPS; cl += 1) {
+                float cland = (LEARN_COARSE_LAND_STEPS > 1)
+                              ? c_land_lo + (cmax - c_land_lo) * (float) cl / (float) (LEARN_COARSE_LAND_STEPS - 1)
+                              : c_land_lo;
+                if (cland > cmax) cland = cmax;
+                if (cland < c_motor_min) cland = c_motor_min;
+                float coarse_land_flow = r->coarse_k * cland;
 
-            // Tightest handoff wins; on a tie the slower landing wins, since it is the more accurate
-            // one and the extra speed was not needed to make the goal; only then the faster throw.
-            bool better = !found;
-            if (found && handoff < best_handoff - 0.001f) better = true;
-            else if (found && handoff < best_handoff + 0.001f) {
-                if (fmin < best_fmin - 1e-4f) better = true;
-                else if (fmin < best_fmin + 1e-4f && total < best_total) better = true;
-            }
-            if (total <= goal && better) {
-                found = true;
-                best_c = cmax; best_f = fmax; best_fmin = fmin;
-                best_handoff = handoff; best_taper = taper;
-                best_cs = cs; best_fs = fs; best_total = total;
-            }
-            if (total < fb_total) {
-                fb_c = cmax; fb_f = fmax; fb_fmin = fmin;
-                fb_handoff = handoff; fb_taper = taper;
-                fb_cs = cs; fb_fs = fs; fb_total = total;
+                // Handoff has to cover the coarse stop scatter at the speed the coarse is actually
+                // doing when its stop fires, with a margin. That is the only floor. It used to be
+                // floored at the fine taper width as well, but below the taper the fine simply picks
+                // up part way down its ramp - it was already running during the bulk, and the
+                // prediction already counts what is in the air - so the taper floor bought no safety
+                // and cost seconds. predict_throw handles a handoff inside the taper.
+                float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
+                                      coarse_margin_mult * 3.0f * coarse_land_flow * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
+                if (handoff >= 0.5f * target) continue;  // bulk has to carry at least half the charge
+
+                float cs, fs;
+                predict_throw(target, coarse_flow, coarse_land_flow, ctaper, fine_flow_max, fine_flow_min,
+                              fmax, fmin, r->dead_time_s, handoff, taper, &cs, &fs);
+                float total = cs + fs;
+
+                // Tightest handoff wins; on a tie the slower fine landing wins, since it is the more
+                // accurate one and the extra speed was not needed to make the goal; only then the
+                // faster throw.
+                bool better = !found;
+                if (found && handoff < best_handoff - 0.001f) better = true;
+                else if (found && handoff < best_handoff + 0.001f) {
+                    if (fmin < best_fmin - 1e-4f) better = true;
+                    else if (fmin < best_fmin + 1e-4f && total < best_total) better = true;
+                }
+                if (total <= goal && better) {
+                    found = true;
+                    best_c = cmax; best_f = fmax; best_fmin = fmin; best_cland = cland;
+                    best_handoff = handoff; best_taper = taper; best_ctaper = ctaper;
+                    best_cs = cs; best_fs = fs; best_total = total;
+                }
+                if (total < fb_total) {
+                    fb_c = cmax; fb_f = fmax; fb_fmin = fmin; fb_cland = cland;
+                    fb_handoff = handoff; fb_taper = taper; fb_ctaper = ctaper;
+                    fb_cs = cs; fb_fs = fs; fb_total = total;
+                }
             }
         }
     }
   }
     if (!found) {
-        best_c = fb_c; best_f = fb_f; best_fmin = fb_fmin;
-        best_handoff = fb_handoff; best_taper = fb_taper;
+        best_c = fb_c; best_f = fb_f; best_fmin = fb_fmin; best_cland = fb_cland;
+        best_handoff = fb_handoff; best_taper = fb_taper; best_ctaper = fb_ctaper;
         best_cs = fb_cs; best_fs = fb_fs; best_total = fb_total;
     }
     if (best_total >= 1e9f) {
@@ -761,12 +819,15 @@ static void fit_profile(void) {
         // charge. Fall back to the slowest bulk and the narrowest legal handoff rather than leaving
         // the threshold at zero, which would let the coarse tube run the whole way to target.
         best_c = c_motor_min;
+        best_cland = c_motor_min;
         best_fmin = fmin_lo;
         best_f = fmaxf(fmin_lo, f_hi / (float) LEARN_SEARCH_STEPS);
         best_taper = fmaxf(LEARN_FINE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->fine_lag_s * r->fine_k * best_f);
+        best_ctaper = fmaxf(LEARN_COARSE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->coarse_lag_s * r->coarse_k * best_c);
         best_handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
-                             coarse_margin_mult * 3.0f * r->coarse_k * best_c * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
-        predict_throw(target, r->coarse_k * best_c, r->fine_k * best_f, r->fine_k * best_fmin,
+                             coarse_margin_mult * 3.0f * r->coarse_k * best_cland * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
+        predict_throw(target, r->coarse_k * best_c, r->coarse_k * best_cland, best_ctaper,
+                      r->fine_k * best_f, r->fine_k * best_fmin,
                       best_f, best_fmin, r->dead_time_s, best_handoff, best_taper, &best_cs, &best_fs);
         best_total = best_cs + best_fs;
     }
@@ -779,15 +840,18 @@ static void fit_profile(void) {
     r->fine_kp = (best_taper > 0.0f) ? (best_f / best_taper) : best_f;
 
     r->coarse_max_rps = best_c;
-    r->coarse_min_rps = fminf(c_motor_min, best_c);
+    r->coarse_min_rps = fminf(best_cland, best_c);
+    r->coarse_taper_gr = best_ctaper;
     r->coarse_stop_threshold = best_handoff;
     r->coarse_tail_at_max = r->coarse_lag_s * r->coarse_k * best_c;
-    r->coarse_tail_sd_at_max = coarse_lag_sd * r->coarse_k * best_c;
+    // Stop scatter at the landing speed, not at max: the coarse is crawling when its stop fires, so
+    // this is the spread the handoff and the live tighten floor have to cover.
+    r->coarse_tail_sd_at_max = coarse_lag_sd * r->coarse_k * r->coarse_min_rps;
     r->fine_tail_at_max = r->fine_lag_s * best_fine_flow_max;
     r->fine_tail_sd_at_max = fine_lag_sd * best_fine_flow_max;
 
-    // Hold full coarse speed until the last half grain before the handoff
-    r->coarse_kp = r->coarse_max_rps / 0.5f;
+    // Full coarse speed until the taper window, then proportional down to the landing speed
+    r->coarse_kp = (best_ctaper > 0.0f) ? (r->coarse_max_rps / best_ctaper) : r->coarse_max_rps;
 
     r->predicted_coarse_s = best_cs;
     r->predicted_fine_s = best_fs;
@@ -802,15 +866,22 @@ static void fit_profile(void) {
 static void back_off_profile(void) {
     learn_result_t * r = &learn_mode.result;
     float f_motor_min = fmaxf(get_motor_min_speed(SELECT_FINE_TRICKLER_MOTOR), 0.05f);
+    float c_motor_min = fmaxf(get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR), 0.05f);
 
     r->fine_min_rps = fmaxf(f_motor_min, r->fine_min_rps * 0.7f);
     r->fine_max_rps = fmaxf(r->fine_min_rps, r->fine_max_rps * 0.85f);
     r->fine_taper_gr = r->fine_taper_gr * 1.4f;
     r->fine_kp = r->fine_max_rps / r->fine_taper_gr;
     r->coarse_stop_threshold = r->coarse_stop_threshold * 1.3f;
+    // Slow the coarse landing too; its stop scatter, and the floor under the handoff, go with it.
+    float old_cland = r->coarse_min_rps;
+    r->coarse_min_rps = fmaxf(c_motor_min, r->coarse_min_rps * 0.7f);
+    if (old_cland > 0.0f) r->coarse_tail_sd_at_max *= r->coarse_min_rps / old_cland;
 
     predict_throw(learn_mode.config.confirm_target,
                   r->coarse_k * r->coarse_max_rps,
+                  r->coarse_k * r->coarse_min_rps,
+                  r->coarse_taper_gr,
                   r->fine_k * r->fine_max_rps,
                   r->fine_k * r->fine_min_rps,
                   r->fine_max_rps, r->fine_min_rps, r->dead_time_s,
@@ -1305,7 +1376,7 @@ bool http_rest_learn_state(struct fs_file *file, int num_params, char *params[],
     snprintf(json_buffer, sizeof(json_buffer),
              "%s{\"st\":%d,\"i\":%d,\"n\":%d,\"sp\":%.2f,\"w\":%.3f,\"msg\":\"%s\",\"ok\":%s,"
              "\"ck\":%.3f,\"ct\":%.3f,\"cts\":%.3f,\"fk\":%.4f,\"ft\":%.3f,\"fts\":%.3f,"
-             "\"cmin\":%.2f,\"cmax\":%.2f,\"ckp\":%.3f,\"fmin\":%.2f,\"fmax\":%.2f,\"fkp\":%.3f,\"ftw\":%.3f,\"cst\":%.3f,"
+             "\"cmin\":%.2f,\"cmax\":%.2f,\"ckp\":%.3f,\"ctw\":%.3f,\"fmin\":%.2f,\"fmax\":%.2f,\"fkp\":%.3f,\"ftw\":%.3f,\"cst\":%.3f,"
              "\"cp\":%d,\"cn\":%d,\"cavg\":%.2f,\"pc\":%.2f,\"pf\":%.2f,\"pt\":%.2f,\"goal\":%s,\"cup\":%.1f,"
              "\"cr\":%d,\"met\":%s,\"ctk\":%.3f,\"ftk\":%.4f,\"clag\":%.2f,\"flag\":%.2f,\"lagu\":%.2f,\"pred\":%s,\"lagsd\":%.2f,\"dead\":%.2f}",
              http_json_header,
@@ -1318,7 +1389,7 @@ bool http_rest_learn_state(struct fs_file *file, int num_params, char *params[],
              boolean_to_string(learn_mode.result_valid),
              r->coarse_k, r->coarse_tail_at_max, r->coarse_tail_sd_at_max,
              r->fine_k, r->fine_tail_at_max, r->fine_tail_sd_at_max,
-             r->coarse_min_rps, r->coarse_max_rps, r->coarse_kp,
+             r->coarse_min_rps, r->coarse_max_rps, r->coarse_kp, r->coarse_taper_gr,
              r->fine_min_rps, r->fine_max_rps, r->fine_kp, r->fine_taper_gr, r->coarse_stop_threshold,
              (int) r->confirm_pass, (int) r->confirm_total, r->confirm_avg_time,
              r->predicted_coarse_s, r->predicted_fine_s, r->predicted_total_s,

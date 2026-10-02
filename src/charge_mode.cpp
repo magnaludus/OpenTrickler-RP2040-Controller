@@ -335,7 +335,10 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
         st->clean_streak = 0;
         if (coarse_ran_long) {
             // Bulk carried past the handoff. Slow it and give the prediction more room to work in.
+            // The landing speed is the direct lever on the stop scatter, so it comes down too.
             profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 0.92f, st->base_coarse_max, coarse_motor_cap);
+            profile->coarse_min_flow_speed_rps = fmaxf(get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR),
+                                                       profile->coarse_min_flow_speed_rps * 0.85f);
             float wider = fminf(handoff * 1.15f, HANDOFF_MAX_FRAC * charge_mode_config.target_charge_weight);
             charge_mode_config.eeprom_charge_mode_data.coarse_stop_threshold = learn_bound(wider, st->base_handoff, 0.0f);
         }
@@ -391,7 +394,10 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
             st->clean_streak = 0;
 
             if (coarse_s >= fine_s) {
-                profile->coarse_max_flow_speed_rps = learn_bound(profile->coarse_max_flow_speed_rps * 1.06f, st->base_coarse_max, coarse_motor_cap);
+                float old_cmax = profile->coarse_max_flow_speed_rps;
+                profile->coarse_max_flow_speed_rps = learn_bound(old_cmax * 1.06f, st->base_coarse_max, coarse_motor_cap);
+                // Keep the coarse taper window (cmax / Kp) the same width as the speed comes up
+                if (old_cmax > 0.0f) profile->coarse_kp *= profile->coarse_max_flow_speed_rps / old_cmax;
             }
             else {
                 // Narrow the handoff first, it is cheaper than running the fine tube harder.

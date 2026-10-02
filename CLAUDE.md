@@ -794,3 +794,23 @@ WiFi through Settings > Firmware in the web portal.
   (`python3 tests/control_regressions.py`). The portal UF2 test reads `build_pico_w/app.uf2`
   and `build_pico2_w/app.uf2`; symlink the real build dirs to those names. The charge-loop
   harness stubs `handoff_for_target()` and `learn_landing_trim()`.
+
+## Coarse taper: the handoff no longer scales with bulk speed (post v2.22)
+
+- Session 2026-10-01 20:13 (v2.3-test2): coarse 1.85 s, fine 9.3-9.9 s, 11.5 s a throw. The fit's
+  handoff was `safety x 3 x coarse_flow_at_max x lag_sd`, which at ~8 gr/s bulk came out past the
+  0.5 x target cap: 13 gr through the fine tube at ~1.4 gr/s. Live tuning narrows the handoff 5%
+  per 5 clean throws, so it could never dig out of that in a session.
+- The coarse now runs flat out to a taper window (`coarse_taper_gr` = 3 x coarse lag x bulk flow,
+  min 0.5 gr; `coarse_kp = cmax / window`) and ramps proportionally down to a landing speed
+  (`coarse_min_rps`, swept by the fit from the ladder's bottom rung up to cmax). The handoff is
+  built on the stop scatter *at the landing speed*. `predict_throw()` models the window as
+  de/dt = -(a e + F) with the fine still adding. `coarse_tail_sd_at_max` now holds the scatter at
+  the landing speed (it is the live tighten floor); back-off slows the landing 0.7x as well as
+  widening the handoff 1.3x; a live over with the bulk running long drops the landing 0.85x; a
+  live coarse speed-up scales `coarse_kp` to keep the window.
+- scratchpad `fit_sim.py` with guessed hardware numbers (ck 2, fk 0.5, lag 0.4/0.5, lag sd 0.3/0.1):
+  old fit 10.3 s (handoff 5.8), new 8.2 s (cmax 5 rps, land 0.8 rps, handoff 2.3). Both miss the
+  7 s goal, so both are the fastest-on-grid fallback. The fine phase (4.8 s for 2.3 gr) is now the
+  bottleneck: ln(fmax/fmin) x 3 x fine lag. Unverified on hardware; re-run Learn to get it.
+- Learn REST gained `ctw` (coarse taper window); the portal shows it beside Coarse Kp.

@@ -63,6 +63,7 @@ typedef struct {
     float fine_max_rps;
     float fine_kp;
     float fine_taper_gr;            // fine runs at max until this close, then ramps to min
+    float coarse_taper_gr;          // coarse runs at max until this close to its stop, then ramps to its landing speed
     float coarse_stop_threshold;
 
     // Predicted throw at the confirm target with the fitted profile
