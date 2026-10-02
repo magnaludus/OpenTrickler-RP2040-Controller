@@ -82,5 +82,6 @@ _deps
 build*/
 
 # Local ARM toolchain download
-.toolchain/build_pico_w
+.toolchain/
+build_pico_w
 build_pico2_w
