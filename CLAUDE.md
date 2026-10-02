@@ -847,3 +847,23 @@ WiFi through Settings > Firmware in the web portal.
 - Gotcha: the dev harness mangles a backslash-zero in Python heredocs into a NUL byte (it broke
   a C string terminator in a C string once); and a Python text-mode rewrite of a repo file turns LF into CRLF. Edit
   with the Edit tool or write bytes explicitly.
+
+## Learn Style: Normal / Aggressive (v2.3.5, branch `tuner-v2`)
+
+- **What it is.** `l11` on the Learn page. Choosing a style fills Time Goal / Target Success / Bulk
+  Safety / Landing Sigma with presets (Normal 8.5 s / 95% / 1.5 / 2.0, Aggressive 7.0 s / 90% / 1.0 /
+  1.5), all editable. Aggressive also lowers the handoff floor to 0.15 gr and loosens the live tuner
+  (probes on 0.9x spare margin, 3 misses tolerated, smaller gains kept, knobs 1.5x further). The style
+  byte sits in the padding after the config revision, so EEPROM layout and saved settings carry over.
+- **First hardware result (2026-10-01).** Same profile (NewProfile7), same 26.5 gr. Normal fit: handoff
+  0.578, fine min 0.316, confirm 10/10 at 10.4 s, charging ~10.3 s. Aggressive fit: handoff 0.372, fine
+  min 0.51, fine Kp 1.62, predicted 6.9 s, confirm 9/10 at 8.3 s, first ten charges 8.07 s with no
+  misses (error mean -0.02 gr). About 22% faster than Normal. Small samples: watch the miss rate over
+  a longer run before trusting it.
+- **Gotchas found this session.** `c8` (set_point_mean_margin) at 0.000 blocks the zero-wait forever
+  (`|mean| < c8`), so nothing throws. Settings changed in the portal without Save are RAM-only and are
+  lost on reboot. The device's web server drops requests when several are in flight; the Learn page now
+  retries its load. An outside edit mid-probe used to promote the untested candidate (fixed).
+- The Learn fit still builds a ~27 gr coarse taper window (`coarse_kp` ~0.057) because it sizes the
+  window as 3 x coarse lag x bulk flow. That is the fit's own choice, not a leftover; the simulation says
+  it is near a plateau, and a steeper hand-set taper (Kp 0.15) made throws slower (12-14 s) with an over.
