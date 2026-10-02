@@ -85,6 +85,17 @@ def test_recovers_from_drift():
     print("recovers from a mid-run plant change: passed")
 
 
+def test_unit_edge_cases():
+    exe = ev.BUILD / ("tuner_unit.exe" if ev.os.name == "nt" else "tuner_unit")
+    cc = ev.os.environ.get("CC")
+    cmd = ([cc] if cc else [sys.executable, "-m", "ziglang", "cc"]) + [
+        "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all",
+        str(ev.ROOT / "tests/tuner_unit.c"), str(ev.ROOT / "src/learn_tuner.c"), "-I" + str(ev.ROOT / "src"),
+        "-lm", "-o", str(exe)]
+    subprocess.run(cmd, check=True)
+    subprocess.run([str(exe)], check=True)
+
+
 def test_deterministic():
     a = ev.sim(1, 3, 120, [])
     b = ev.sim(1, 3, 120, [])
@@ -94,6 +105,7 @@ def test_deterministic():
 
 if __name__ == "__main__":
     ev.compile_sim()
+    test_unit_edge_cases()
     test_deterministic()
     test_invariants_fuzz()
     test_beats_the_old_tuner()

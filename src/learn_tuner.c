@@ -446,6 +446,18 @@ void tuner_observe(tuner_t * t, const tuner_env_t * env, const tuner_obs_t * obs
 
     // First throw, or something outside the tuner moved the profile (a Learn fit, a portal edit):
     // whatever was measured before describes a different profile, so start over from here.
+    if (t->init && t->mode == TUNER_PROBING && params_differ(p, &t->seen)) {
+        // An outside edit landed while a candidate was live. The candidate was never verified, so it
+        // must not become the new baseline by accident: put back every field the edit did not touch
+        // (those still equal what the tuner left), and keep the fields that were edited.
+        if (fabsf(p->fine_max - t->seen.fine_max) <= 1e-4f) p->fine_max = t->good.fine_max;
+        if (fabsf(p->fine_min - t->seen.fine_min) <= 1e-4f) p->fine_min = t->good.fine_min;
+        if (fabsf(p->fine_kp - t->seen.fine_kp) <= 1e-4f) p->fine_kp = t->good.fine_kp;
+        if (fabsf(p->coarse_max - t->seen.coarse_max) <= 1e-4f) p->coarse_max = t->good.coarse_max;
+        if (fabsf(p->coarse_min - t->seen.coarse_min) <= 1e-4f) p->coarse_min = t->good.coarse_min;
+        if (fabsf(p->coarse_kp - t->seen.coarse_kp) <= 1e-4f) p->coarse_kp = t->good.coarse_kp;
+        if (fabsf(p->handoff - t->seen.handoff) <= 1e-4f) p->handoff = t->good.handoff;
+    }
     if (!t->init || params_differ(p, &t->seen)) {
         anchor_to(t, p);
     }
