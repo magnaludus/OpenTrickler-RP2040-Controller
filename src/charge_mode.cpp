@@ -715,6 +715,7 @@ void charge_mode_wait_for_complete() {
     float fine_aim_weight = charge_mode_config.target_charge_weight + learn_landing_trim();
 
     TickType_t last_sample_tick = xTaskGetTickCount();
+    TickType_t last_valid_measurement_tick = last_sample_tick;
     TickType_t current_sample_tick = last_sample_tick;
     bool should_coarse_trickler_move = true;
 
@@ -742,6 +743,7 @@ void charge_mode_wait_for_complete() {
         // Non block waiting for the input
         ButtonEncoderEvent_t button_encoder_event = button_wait_for_input(false);
         if (button_encoder_event == BUTTON_RST_PRESSED) {
+            motor_set_speed(SELECT_BOTH_MOTOR, 0);
             charge_mode_config.charge_mode_state = CHARGE_MODE_EXIT;
             return;
         }
@@ -749,11 +751,16 @@ void charge_mode_wait_for_complete() {
         // Run the PID controlled loop to start charging
         // Perform the measurement
         float current_weight;
-        if (!scale_block_wait_for_next_measurement(200, &current_weight)) {
-            // If no measurement within 200ms then poll the button and retry
+        if (!scale_block_wait_for_next_measurement(200, &current_weight) || !isfinite(current_weight)) {
+            if (xTaskGetTickCount() - last_valid_measurement_tick >= pdMS_TO_TICKS(CHARGE_SCALE_TIMEOUT_MS)) {
+                motor_set_speed(SELECT_BOTH_MOTOR, 0);
+                charge_mode_config.charge_mode_state = CHARGE_MODE_EXIT;
+                return;
+            }
             continue;
         }
         current_sample_tick = xTaskGetTickCount();
+        last_valid_measurement_tick = current_sample_tick;
 
         // Handle coarse trickler backoff stop
         if (coarse_backoff_in_progress && (current_sample_tick >= coarse_backoff_end_tick)) {
@@ -828,7 +835,8 @@ void charge_mode_wait_for_complete() {
         // Update fine trickler speed
         float elapse_time_ms = (current_sample_tick - last_sample_tick) / portTICK_RATE_MS;
         fine_trickler_integral += fine_trickler_error;
-        float fine_trickler_derivative = (fine_trickler_error - fine_trickler_last_error) / elapse_time_ms;
+        float fine_trickler_derivative = (elapse_time_ms > 0.0f)
+            ? (fine_trickler_error - fine_trickler_last_error) / elapse_time_ms : 0.0f;
 
         // Update fine trickler speed
         float new_p = current_profile->fine_kp * fine_trickler_error;
@@ -845,7 +853,8 @@ void charge_mode_wait_for_complete() {
         // Update coarse trickler speed
         if (should_coarse_trickler_move && !coarse_backoff_in_progress) {
             coarse_trickler_integral += coarse_trickler_error;
-            float coarse_trickler_derivative = (coarse_trickler_error - coarse_trickler_last_error) / elapse_time_ms;
+            float coarse_trickler_derivative = (elapse_time_ms > 0.0f)
+                ? (coarse_trickler_error - coarse_trickler_last_error) / elapse_time_ms : 0.0f;
 
             new_p = current_profile->coarse_kp * coarse_trickler_error;
             new_i = current_profile->coarse_ki * coarse_trickler_integral;
@@ -939,6 +948,7 @@ static bool charge_mode_top_up(float bracket) {
     snprintf(title_string, sizeof(title_string), "Top Up");
     float aim = charge_mode_config.target_charge_weight + learn_landing_trim();
     TickType_t start = xTaskGetTickCount();
+    TickType_t last_valid_measurement_tick = start;
     TickType_t deadline = start + pdMS_TO_TICKS(15000);
     motor_set_speed(SELECT_FINE_TRICKLER_MOTOR, speed);
 
@@ -952,7 +962,15 @@ static bool charge_mode_top_up(float bracket) {
         }
         if (xTaskGetTickCount() > deadline) break;
         float m;
-        if (!scale_block_wait_for_next_measurement(200, &m)) continue;
+        if (!scale_block_wait_for_next_measurement(200, &m) || !isfinite(m)) {
+            if (xTaskGetTickCount() - last_valid_measurement_tick >= pdMS_TO_TICKS(CHARGE_SCALE_TIMEOUT_MS)) {
+                charge_mode_config.charge_mode_state = CHARGE_MODE_EXIT;
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        last_valid_measurement_tick = xTaskGetTickCount();
         if (aim - m < bracket + 0.0005f) break;
     }
     motor_set_speed(SELECT_FINE_TRICKLER_MOTOR, 0);

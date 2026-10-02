@@ -10,6 +10,7 @@
 #define EEPROM_CHARGE_MODE_DATA_REV                     12             // 16 byte
 
 #define WEIGHT_STRING_LEN 8
+#define CHARGE_SCALE_TIMEOUT_MS 2000u
 
 // Acceptance bracket. Tolerance = steps * BRACKET_STEP_GRAINS, selectable from the screen and the portal.
 #define BRACKET_STEP_GRAINS         0.02f

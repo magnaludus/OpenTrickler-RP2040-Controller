@@ -95,6 +95,7 @@ target_include_directories("${TARGET_NAME}" PUBLIC ${CMAKE_SOURCE_DIR}/targets)
 
 # Include libraries1
 target_link_libraries("${TARGET_NAME}"
+    boot_uf2_headers
     pico_stdlib
     hardware_pio
     hardware_spi

@@ -14,6 +14,7 @@
 #include "scale.h"
 #include "motors.h"
 #include "charge_mode.h"
+#include "servo_gate.h"
 #include "profile.h"
 #include "neopixel_led.h"
 #include "session_stats.h"
@@ -28,6 +29,7 @@ learn_mode_t learn_mode;
 
 extern scale_config_t scale_config;
 extern charge_mode_config_t charge_mode_config;
+extern servo_gate_t servo_gate;
 extern neopixel_led_config_t neopixel_led_config;
 extern eeprom_profile_data_t profile_data;
 extern AppState_t exit_state;
@@ -390,6 +392,12 @@ static bool throw_for_time(motor_select_t motor, float speed, float run_s, float
                            float * max_settled, learn_throw_t * out) {
     if (!ensure_cup_room(fmaxf(expected_gr, *max_settled) * 1.15f)) return false;
 
+    // Calibration bypasses the normal charge loop, which usually opens the gate.
+    // Wait for it to open before measuring or starting a timed motor run.
+    if (servo_gate.eeprom_servo_gate_config.servo_gate_enable) {
+        servo_gate_set_ratio(SERVO_GATE_RATIO_OPEN, true);
+    }
+
     set_message("Running");
     learn_mode.current_speed = speed;
 
@@ -399,6 +407,7 @@ static bool throw_for_time(motor_select_t motor, float speed, float run_s, float
 
     throw_start_tick = xTaskGetTickCount();
     throw_running = true;
+    TickType_t last_valid_measurement_tick = throw_start_tick;
     TickType_t stop_target = throw_start_tick + pdMS_TO_TICKS((uint32_t)(run_s * 1000.0f));
     motor_set_speed(motor, speed);
 
@@ -411,12 +420,19 @@ static bool throw_for_time(motor_select_t motor, float speed, float run_s, float
     while (xTaskGetTickCount() < stop_target) {
         if (!check_abort()) { ok = false; break; }
         float m;
-        if (scale_block_wait_for_next_measurement(150, &m)) {
+        if (scale_block_wait_for_next_measurement(150, &m) && isfinite(m)) {
+            last_valid_measurement_tick = xTaskGetTickCount();
             latest = m;
             if (!motion_seen && m > start_w + 0.10f) {
                 motion_seen = true;
                 dead_time = (float)((xTaskGetTickCount() - throw_start_tick) * portTICK_PERIOD_MS) / 1000.0f;
             }
+        }
+        if (xTaskGetTickCount() - last_valid_measurement_tick >= pdMS_TO_TICKS(CHARGE_SCALE_TIMEOUT_MS)) {
+            learn_mode.state = LEARN_STATE_ERROR;
+            set_message("Scale timeout");
+            ok = false;
+            break;
         }
     }
 
@@ -1110,6 +1126,9 @@ uint8_t learn_mode_menu(void) {
     vTaskSuspend(learn_render_task_handler);
     motor_enable(SELECT_COARSE_TRICKLER_MOTOR, false);
     motor_enable(SELECT_FINE_TRICKLER_MOTOR, false);
+    if (servo_gate.eeprom_servo_gate_config.servo_gate_enable) {
+        servo_gate_set_ratio(SERVO_GATE_RATIO_CLOSED, true);
+    }
 
     charge_mode_config.charge_mode_state = CHARGE_MODE_EXIT;
     learn_mode.state = ok ? LEARN_STATE_DONE : learn_mode.state;

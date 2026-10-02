@@ -773,3 +773,24 @@ WiFi through Settings > Firmware in the web portal.
   the fit (was 1.4x).
 - **Portal:** the live-status poll had no timeout, and the next poll is only scheduled once the
   previous one settles, so one unanswered request froze the display. 3 s AbortController added.
+
+## v2.2 and v2.21 never stepped the motors (fixed in v2.22)
+
+- Commit 524dd87 (the Pico W PIO fix, shipped in v2.2) rewrote `driver_pio_init()` to load the
+  stepper program once per PIO block and dropped the two lines that followed the claim in the
+  original: `stepper_program_init()` (pin mux + `pio_sm_init`) and `pio_sm_set_enabled()`. The
+  state machines were claimed but never configured or started, so every speed command landed in
+  a FIFO nothing was reading. v2.2, v2.21 and the v2.3 test build all have dead motors. v2.22
+  (Codex, on `main`) restored the init, with a `put 0` so the SM starts stopped.
+- Lesson: when a function is rewritten, diff the new body against the old line by line for what
+  was *removed*, not just what the new code does. A build that links proves nothing about PIO.
+- v2.22 also: queue item size `sizeof(float)` (was 12 bytes, over-writing the receiver's stack),
+  `speed_to_period()` returns 0 for non-positive/non-finite speed, ramps use elapsed time so the
+  32-bit microsecond timer can wrap, PID derivative guarded for a same-tick sample, a 2 s scale
+  timeout that stops both motors and exits charge / top-up / learn timed runs, Learn opens an
+  enabled servo gate, OTA staging at `PICO_FLASH_SIZE_BYTES/2` (Pico W has 2 MB), RP2040 vector
+  table read past the 256-byte boot2, portal UF2 parser checks family/size/overlap.
+- `tests/control_regressions.py` compiles real functions out of `src/` on the host with stubs
+  (`python3 tests/control_regressions.py`). The portal UF2 test reads `build_pico_w/app.uf2`
+  and `build_pico2_w/app.uf2`; symlink the real build dirs to those names. The charge-loop
+  harness stubs `handoff_for_target()` and `learn_landing_trim()`.
