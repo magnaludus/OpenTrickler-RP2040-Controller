@@ -1766,7 +1766,7 @@
         URL.revokeObjectURL(url);
     }
 
-    function loadLearnPage() {
+    function loadLearnPage(attempt = 0) {
         const form = document.getElementById("learnConfigForm");
         fetch(form.getAttribute("action"))
         .then(response => response.json())
@@ -1776,8 +1776,12 @@
                 if (element) { element.value = String(data[key]); }
             }
         })
-        .catch(() => {});
-        pollLearnState();
+        .catch(() => {
+            // The device's web server drops a request now and then when several are in flight, and
+            // a dropped load used to leave every field blank until the page was reopened. Try again.
+            if (attempt < 6) { setTimeout(() => loadLearnPage(attempt + 1), 600 * (attempt + 1)); }
+        });
+        if (attempt === 0) { pollLearnState(); }
     }
 
     // Servo gate controls only take up room when the gate is enabled in settings
