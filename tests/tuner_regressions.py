@@ -44,10 +44,10 @@ def test_invariants_fuzz():
             "--fmin", f"{rng.uniform(0.15, 0.8):.2f}", "--target", f"{rng.choice([10, 26.5, 42.5, 60]):.1f}",
         ]
         out = subprocess.run([str(ev.EXE), "--throws", "250", "--tuner", "1", "--seed", str(case + 100),
-                              "--block", "250", *extra], capture_output=True, text=True)
+                              "--block", "250", "--aggr", str(case % 2), *extra], capture_output=True, text=True)
         assert out.returncode == 0, f"fuzz case {case} {extra}\n{out.stdout[-400:]}"
         assert "nan" not in out.stdout.lower(), f"NaN in fuzz case {case}"
-    print("invariants over 40 random plants and profiles: passed")
+    print("invariants over 40 random plants and profiles, both styles: passed")
 
 
 def test_beats_the_old_tuner():
@@ -67,6 +67,15 @@ def test_conservative_start_gains():
     static, new = agg(0, CONSERVATIVE), agg(1, CONSERVATIVE)
     assert new[0] < static[0] * 0.92, "a conservative fit should get at least 8% faster"
     print("conservative fit speeds up >= 8%: passed")
+
+
+def test_aggressive_style():
+    for name, extra in [("conservative fit", CONSERVATIVE), ("already good", [])]:
+        normal, aggressive = ev.compare_styles(name, extra)
+        assert aggressive[0] <= normal[0] * 1.02, f"{name}: Aggressive should not be slower than Normal"
+        assert aggressive[1] <= 12.0, f"{name}: Aggressive miss rate {aggressive[1]:.1f}% is past what it promises"
+        assert aggressive[1] >= normal[1] - 1.0, f"{name}: Aggressive should not be the safer style"
+    print("Aggressive faster than Normal, misses bounded: passed")
 
 
 def test_recovers_from_drift():
@@ -110,5 +119,6 @@ if __name__ == "__main__":
     test_invariants_fuzz()
     test_beats_the_old_tuner()
     test_conservative_start_gains()
+    test_aggressive_style()
     test_recovers_from_drift()
     print("all tuner regressions passed")

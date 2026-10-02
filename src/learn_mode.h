@@ -83,8 +83,17 @@ typedef struct {
 #define EEPROM_LEARN_CONFIG_REV     4
 #define LEARN_MAX_CONFIRM_ROUNDS    3
 
+// How hard Learn pushes. Normal is the tested behaviour. Aggressive trades margin for speed: a tighter
+// bulk handoff, a faster fine landing, and a live tuner that probes further and tolerates more
+// misses. It scales the two margin dials below rather than replacing them, so they still mean
+// something in either style.
+#define LEARN_STYLE_NORMAL          0
+#define LEARN_STYLE_AGGRESSIVE      1
+
 typedef struct {
     uint16_t learn_config_rev;
+    uint8_t style;                  // LEARN_STYLE_*. Lives in what was padding, so the saved layout is unchanged
+    uint8_t reserved;
 
     // Targets per throw
     float coarse_target;            // default 8.0
@@ -135,6 +144,7 @@ uint8_t learn_mode_menu(void);              // runs the whole routine, returns t
 bool learn_mode_apply_to_profile(void);     // write the fitted values into the selected profile (RAM)
 float learn_mode_get_land_sigma(void);      // margin the landing speed is held to, for live tuning
 float learn_mode_get_time_goal(void);       // throws at or under this need no live search
+bool learn_mode_is_aggressive(void);        // Learn style: false = Normal, true = Aggressive
 
 // REST
 bool http_rest_learn_state(struct fs_file *file, int num_params, char *params[], char *values[]);

@@ -54,6 +54,8 @@ typedef struct {
     float coarse_sd_floor_gr;       // 3 sigma of the coarse stop scatter from the Learn fit
     float handoff_cap_frac;         // the bulk always carries at least 1 - this share of the charge
     float time_goal_s;              // throws already at or under this are left alone; 0 = always search
+    float handoff_floor_gr;         // narrowest handoff the tuner may set; 0 = the default 0.30
+    bool aggressive;                // push harder: spend more margin, probe further, tolerate more misses
 } tuner_env_t;
 
 typedef enum {

@@ -320,15 +320,18 @@ static void old_observe(old_t * st, const tuner_env_t * env, const tuner_obs_t *
 
 
 // Hard limits the tuner must never break, whatever the plant does. Checked after every throw.
+static float g_handoff_floor = 0.30f;
+static float g_bound_mul = 1.0f;
+
 static void check_invariants(const tuner_params_t * p, const tuner_params_t * start, float target, int throw_no) {
     bool ok = isfinite(p->fine_max) && isfinite(p->fine_min) && isfinite(p->fine_kp) &&
               isfinite(p->coarse_max) && isfinite(p->coarse_min) && isfinite(p->coarse_kp) && isfinite(p->handoff);
     float h_hi = 0.5f * target;
-    ok = ok && p->handoff >= fminf(0.30f, h_hi) - 1e-4f && p->handoff <= h_hi + 1e-4f;
-    ok = ok && p->fine_kp >= 0.4f * start->fine_kp - 1e-4f && p->fine_kp <= 3.0f * start->fine_kp + 1e-4f;
-    ok = ok && p->fine_min >= 0.5f * start->fine_min - 1e-4f && p->fine_min <= 2.0f * start->fine_min + 1e-4f;
+    ok = ok && p->handoff >= fminf(g_handoff_floor, h_hi) - 1e-4f && p->handoff <= h_hi + 1e-4f;
+    ok = ok && p->fine_kp >= 0.4f * start->fine_kp - 1e-4f && p->fine_kp <= 3.0f * g_bound_mul * start->fine_kp + 1e-4f;
+    ok = ok && p->fine_min >= 0.5f * start->fine_min - 1e-4f && p->fine_min <= 2.0f * g_bound_mul * start->fine_min + 1e-4f;
     ok = ok && p->fine_min <= p->fine_max + 1e-4f;
-    ok = ok && p->coarse_max >= 0.5f * start->coarse_max - 1e-4f && p->coarse_max <= 2.0f * start->coarse_max + 1e-4f;
+    ok = ok && p->coarse_max >= 0.5f * start->coarse_max - 1e-4f && p->coarse_max <= 2.0f * g_bound_mul * start->coarse_max + 1e-4f;
     ok = ok && p->coarse_max <= 5.0f + 1e-4f;
     ok = ok && p->coarse_min <= p->coarse_max + 1e-4f && p->coarse_min >= 0.05f - 1e-4f;
     ok = ok && p->coarse_kp >= 0.25f * start->coarse_kp * 0.5f && p->coarse_kp > 0.0f;
@@ -373,6 +376,11 @@ int main(int argc, char ** argv) {
     arg_f(argc, argv, "--target", &target_d);
     arg_f(argc, argv, "--bracket", &bracket_d);
     arg_f(argc, argv, "--lsig", &lsig);
+    double aggr_d = 0.0;
+    arg_f(argc, argv, "--aggr", &aggr_d);
+    bool aggr = aggr_d > 0.5;
+    // What the adapter does for Aggressive: a smaller Landing Sigma and a lower handoff floor
+    if (aggr) lsig *= 0.75;
     float target = (float) target_d, bracket = (float) bracket_d;
     double lsig_unused = 7.0;
 
@@ -391,11 +399,15 @@ int main(int argc, char ** argv) {
 
     tuner_env_t env = {.target = target, .bracket = bracket, .land_sigma = (float) lsig,
                        .coarse_motor_cap = 5.0f, .fine_motor_cap = 4.5f, .coarse_motor_min = 0.05f,
-                       .coarse_sd_floor_gr = 0.321f, .handoff_cap_frac = 0.5f, .time_goal_s = 7.0f};
+                       .coarse_sd_floor_gr = 0.321f, .handoff_cap_frac = 0.5f, .time_goal_s = 7.0f,
+                       .handoff_floor_gr = 0.30f, .aggressive = false};
     (void) 0;
 
     arg_f(argc, argv, "--goal", &lsig_unused);
     env.time_goal_s = (float) lsig_unused;
+    if (aggr) { env.aggressive = true; env.handoff_floor_gr = 0.15f; env.coarse_sd_floor_gr = 2.0f * 0.107f; }
+    g_handoff_floor = env.handoff_floor_gr;
+    g_bound_mul = aggr ? 1.5f : 1.0f;
     const tuner_params_t start_params = p;
     tuner_t tuner;
     tuner_init(&tuner);

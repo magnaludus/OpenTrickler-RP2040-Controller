@@ -148,6 +148,7 @@ static rgbw_u32_t session_backlight(void) {
 
 extern "C" float learn_mode_get_land_sigma(void);
 extern "C" float learn_mode_get_time_goal(void);
+extern "C" bool learn_mode_is_aggressive(void);
 
 static tuner_t learn_tuner[MAX_PROFILE_CNT];
 
@@ -234,7 +235,12 @@ static void learn_post_throw(uint8_t profile_idx, throw_result_t result, float b
     env.coarse_motor_cap = get_motor_max_speed(SELECT_COARSE_TRICKLER_MOTOR);
     env.fine_motor_cap = get_motor_max_speed(SELECT_FINE_TRICKLER_MOTOR);
     env.coarse_motor_min = get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR);
-    env.coarse_sd_floor_gr = 3.0f * charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr;
+    // Aggressive lets the handoff come down to 2 sigma of the coarse stop scatter (Normal: 3) and to
+    // 0.15 gr (Normal: 0.30). Landing Sigma already arrives scaled for the style.
+    const bool aggressive = learn_mode_is_aggressive();
+    env.coarse_sd_floor_gr = (aggressive ? 2.0f : 3.0f) * charge_mode_config.eeprom_charge_mode_data.coarse_tail_sd_gr;
+    env.handoff_floor_gr = aggressive ? 0.15f : 0.30f;
+    env.aggressive = aggressive;
     env.handoff_cap_frac = HANDOFF_MAX_FRAC;
     env.time_goal_s = learn_mode_get_time_goal();
 

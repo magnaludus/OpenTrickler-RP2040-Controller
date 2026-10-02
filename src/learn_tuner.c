@@ -29,6 +29,26 @@
 enum { KNOB_HANDOFF = 0, KNOB_FINE_KP = 1, KNOB_COARSE_MAX = 2, KNOB_COARSE_TAPER = 3 };
 
 
+// How hard the tuner pushes. Normal is the behaviour that was tested; Aggressive spends more of the
+// accuracy margin, tolerates more misses while probing, and lets knobs travel further from the fit.
+typedef struct {
+    float risky_margin;     // spare margin (x Landing Sigma) a risky probe needs before it may run
+    uint8_t reject_misses;  // misses in one trial that throw the probe out
+    float min_gain_s;       // least time gain that keeps a probe
+    float bound_mul;        // stretches the upper end of every knob's allowed range
+    float step_mul;         // scales probe step sizes
+} tuner_policy_t;
+
+static tuner_policy_t policy_for(const tuner_env_t * env) {
+    if (env->aggressive) {
+        tuner_policy_t a = {0.90f, 3, 0.20f, 1.5f, 1.25f};
+        return a;
+    }
+    tuner_policy_t n = {RISKY_MARGIN_FRAC, 2, 0.30f, 1.0f, 1.0f};
+    return n;
+}
+
+
 static float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -151,13 +171,14 @@ void tuner_init(tuner_t * t) {
 // outside edits can walk a knob out of the range it is allowed to live in.
 static void clamp_params(const tuner_t * t, const tuner_env_t * env, tuner_params_t * p) {
     const tuner_params_t * a = &t->anchor;
+    float bm = policy_for(env).bound_mul;
 
-    if (a->fine_kp > 0.0f) p->fine_kp = clampf(p->fine_kp, 0.4f * a->fine_kp, 3.0f * a->fine_kp);
-    if (a->fine_min > 0.0f) p->fine_min = clampf(p->fine_min, 0.5f * a->fine_min, 2.0f * a->fine_min);
+    if (a->fine_kp > 0.0f) p->fine_kp = clampf(p->fine_kp, 0.4f * a->fine_kp, 3.0f * bm * a->fine_kp);
+    if (a->fine_min > 0.0f) p->fine_min = clampf(p->fine_min, 0.5f * a->fine_min, 2.0f * bm * a->fine_min);
     if (p->fine_min > p->fine_max) p->fine_min = p->fine_max;
 
     if (a->coarse_max > 0.0f) {
-        float hi = 2.0f * a->coarse_max;
+        float hi = 2.0f * bm * a->coarse_max;
         if (env->coarse_motor_cap > 0.0f && hi > env->coarse_motor_cap) hi = env->coarse_motor_cap;
         float lo = 0.5f * a->coarse_max;
         if (lo > hi) lo = hi;
@@ -171,7 +192,9 @@ static void clamp_params(const tuner_t * t, const tuner_env_t * env, tuner_param
     if (p->coarse_min > p->coarse_max) p->coarse_min = p->coarse_max;
 
     float h_hi = env->handoff_cap_frac * env->target;
-    float h_lo = fmaxf(0.30f, env->coarse_sd_floor_gr);
+    // Hard floor on the handoff: a fixed minimum, and the coarse stop scatter the Learn fit measured
+    // times the style's multiple (the adapter folds that multiple into coarse_sd_floor_gr)
+    float h_lo = fmaxf(env->handoff_floor_gr > 0.0f ? env->handoff_floor_gr : 0.30f, env->coarse_sd_floor_gr);
     if (h_hi < h_lo) h_lo = h_hi;
     if (h_hi > 0.0f) p->handoff = clampf(p->handoff, h_lo, h_hi);
 }
@@ -251,7 +274,8 @@ static bool start_probe(tuner_t * t, const tuner_env_t * env, tuner_params_t * p
         }
     }
     float margin = tuner_margin_sigma(t, env->bracket);
-    bool margin_ok = (margin >= RISKY_MARGIN_FRAC * env->land_sigma);
+    tuner_policy_t pol = policy_for(env);
+    bool margin_ok = (margin >= pol.risky_margin * env->land_sigma);
 
     for (int tries = 0; tries < TUNER_KNOBS; tries += 1) {
         int k = (t->knob + tries) % TUNER_KNOBS;
@@ -260,7 +284,7 @@ static bool start_probe(tuner_t * t, const tuner_env_t * env, tuner_params_t * p
         if (is_risky(k, dir) && !margin_ok) continue;
 
         tuner_params_t cand = t->good;
-        apply_knob(&cand, k, 1.0f + (float) dir * t->step[k]);
+        apply_knob(&cand, k, 1.0f + (float) dir * t->step[k] * pol.step_mul);
         clamp_params(t, env, &cand);
         if (!params_differ(&cand, &t->good)) {
             // Pinned against a limit in this direction: nowhere left to go that way
@@ -300,11 +324,11 @@ typedef enum {
 // zero tolerated misses), loosen it to converge sooner at some risk of drift. The numbers below are
 // defaults that held up in simulation, not truths about your hardware.
 static verdict_t probe_verdict(const tuner_arm_t * base, const tuner_arm_t * trial,
-                               float margin_sigma, float land_sigma) {
+                               float margin_sigma, float land_sigma, const tuner_policy_t * pol) {
     // Chance alone gives ~5% of throws outside a 2 sigma bracket, so one miss in 10 is ordinary
     // and two is not. A single miss is only forgiven if the spread still has its margin.
-    if (trial->misses >= 2) return VERDICT_REVERT;
-    if (trial->misses == 1 && margin_sigma < PROBE_MARGIN_FRAC * land_sigma) return VERDICT_REVERT;
+    if (trial->misses >= pol->reject_misses) return VERDICT_REVERT;
+    if (trial->misses + 1 == pol->reject_misses && trial->misses > 0 && margin_sigma < PROBE_MARGIN_FRAC * land_sigma) return VERDICT_REVERT;
 
     // A faster throw that lands wider is not a free win: the landing speed law would claw the
     // margin back by slowing the landing, and the time with it. Judge the spread here, where the
@@ -314,7 +338,7 @@ static verdict_t probe_verdict(const tuner_arm_t * base, const tuner_arm_t * tri
 
     float gain = arm_mean(base) - arm_mean(trial);
     float se = sqrtf(arm_var(base) / (float) base->n + arm_var(trial) / (float) trial->n);
-    float needed = fmaxf(0.30f, 1.0f * se);
+    float needed = fmaxf(pol->min_gain_s, 1.0f * se);
     return (gain > needed) ? VERDICT_KEEP : VERDICT_REVERT;
 }
 
@@ -353,7 +377,8 @@ static void reopen_search(tuner_t * t) {
 
 static void finish_probe(tuner_t * t, const tuner_env_t * env, tuner_params_t * p) {
     float margin = tuner_margin_sigma(t, env->bracket);
-    verdict_t v = probe_verdict(&t->base, &t->trial, margin, env->land_sigma);
+    tuner_policy_t pol = policy_for(env);
+    verdict_t v = probe_verdict(&t->base, &t->trial, margin, env->land_sigma, &pol);
     int k = t->knob;
 
     if (v == VERDICT_KEEP) {
@@ -505,8 +530,9 @@ void tuner_observe(tuner_t * t, const tuner_env_t * env, const tuner_obs_t * obs
             // the knob under test.
             arm_add(&t->trial, obs->total_s, obs->error_gr, miss);
             // A gross overcharge means the candidate is wrong, not unlucky: stop paying for it
-            if (obs->result == TUNER_THROW_OVER && obs->error_gr > 2.0f * env->bracket) t->trial.misses = 2;
-            if (t->trial.n >= TUNER_ARM_N || t->trial.misses >= 2) finish_probe(t, env, p);
+            tuner_policy_t pol = policy_for(env);
+            if (obs->result == TUNER_THROW_OVER && obs->error_gr > 2.0f * env->bracket) t->trial.misses = pol.reject_misses;
+            if (t->trial.n >= TUNER_ARM_N || t->trial.misses >= pol.reject_misses) finish_probe(t, env, p);
             break;
 
         case TUNER_CONVERGED:

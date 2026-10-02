@@ -170,6 +170,15 @@
                         <form id="learnConfigForm" action="/rest/learn_config" class="grid grid-cols-1 gap-3">
                             <span class="label-text-alt opacity-70">Pan stays on the scale the whole time. 12 coarse throws then 12 fine throws at fixed speeds, the scale is re-zeroed after each one settles. Then it fits the selected profile and runs the confirmation throws at the target below. Select the profile on the Profiles page first.</span>
 
+                            <div class="grid grid-cols-1 gap-1">
+                                <span class="label-text">Learn Style</span>
+                                <select class="select select-bordered" name="l11">
+                                    <option value="0">Normal - tested, keeps its margin</option>
+                                    <option value="1">Aggressive - faster, pushes the limit</option>
+                                </select>
+                                <span class="label-text-alt opacity-70">Aggressive hands the bulk tube more of the charge (tighter handoff, down to 0.15 gr), lands the fine tube faster (Landing Sigma x 0.75), and lets the live tuner probe further and tolerate more misses. On the simulated tube that is roughly 3-8% faster throws for about 2-3 points more throws outside the bracket. Expect more overs, and watch the first throws after switching. Re-run Learn Powder after changing it - the style shapes the fit.</span>
+                            </div>
+
                             <div class="grid grid-cols-2 gap-2">
                                 <div class="grid grid-cols-1 gap-1">
                                     <span class="label-text">Coarse Throw (gr)</span>

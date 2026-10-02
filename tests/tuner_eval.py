@@ -28,6 +28,15 @@ def sim(tuner, seed, throws, extra):
     return float(m.group(1)), int(m.group(2)), int(m.group(3)), last
 
 
+def compare_styles(name, extra, seeds=range(1, 9), throws=300):
+    def agg(aggr):
+        rs = [sim(1, s, throws, extra + ["--aggr", str(aggr)]) for s in seeds]
+        return (statistics.mean(r[0] for r in rs), 100.0 * sum(r[1] for r in rs) / (throws * len(rs)))
+    normal, aggressive = agg(0), agg(1)
+    print(f"{name:26s} normal {normal[0]:5.2f}s {normal[1]:4.1f}%  | aggressive {aggressive[0]:5.2f}s {aggressive[1]:4.1f}%")
+    return normal, aggressive
+
+
 def compare(name, extra, seeds=range(1, 9), throws=300):
     def agg(mode):
         rs = [sim(mode, s, throws, extra) for s in seeds]

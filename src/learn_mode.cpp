@@ -54,8 +54,14 @@ static bool throw_running = false;
 #define LEARN_ZERO_RETRY_MS             2500    // resend the zero command if the scale has not taken it by then
 #define LEARN_ZERO_MAX_TRIES            12
 
+// Adding the style byte must not move anything: it sits in the two bytes of padding after the
+// revision, so a saved config from before still loads and keeps its settings.
+static_assert(sizeof(learn_config_t) == 48, "learn_config_t layout is stored in EEPROM");
+
 static const learn_config_t default_learn_config = {
     .learn_config_rev = 0,
+    .style = LEARN_STYLE_NORMAL,
+    .reserved = 0,
     .coarse_target = 8.0f,
     .fine_target = 1.75f,
     .coarse_speed_ceiling = 6.0f,
@@ -646,8 +652,14 @@ static void fit_profile(void) {
     // measurements. With prediction off it already has to swallow the whole tail at 3x, so stacking
     // the factor there would just make an uncompensated profile needlessly slow.
     float coarse_margin_mult = r->predict_used ? learn_mode.config.coarse_stop_safety : 1.0f;
+    // Aggressive hands the bulk more of the charge: two thirds of the cushion, a thinner fixed
+    // allowance on top of it and a lower floor on the handoff. Normal is unchanged.
+    const bool aggressive = learn_mode_is_aggressive();
+    if (aggressive) coarse_margin_mult *= 0.67f;
     if (coarse_margin_mult < LEARN_COARSE_STOP_SAFETY_MIN) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MIN;
     if (coarse_margin_mult > LEARN_COARSE_STOP_SAFETY_MAX) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MAX;
+    const float stop_margin_gr = aggressive ? 0.05f : LEARN_COARSE_STOP_MARGIN_GR;
+    const float stop_min_gr = aggressive ? 0.15f : LEARN_COARSE_STOP_MIN_GR;
 
     float c_motor_min = fmaxf(get_motor_min_speed(SELECT_COARSE_TRICKLER_MOTOR), 0.05f);
     float f_motor_min = fmaxf(get_motor_min_speed(SELECT_FINE_TRICKLER_MOTOR), 0.05f);
@@ -661,9 +673,7 @@ static void fit_profile(void) {
     // The landing error is the landing flow multiplied by how much the lag varies, and it scales
     // linearly with landing speed - halving the speed halves the spread, confirmed on hardware.
     // land_sigma says how many of those sigmas have to fit in the budget.
-    float land_sigma = learn_mode.config.land_sigma;
-    if (land_sigma < LEARN_LAND_SIGMA_MIN) land_sigma = LEARN_LAND_SIGMA_MIN;
-    if (land_sigma > LEARN_LAND_SIGMA_MAX) land_sigma = LEARN_LAND_SIGMA_MAX;
+    float land_sigma = learn_mode_get_land_sigma();
     float fmin_err = (r->fine_k > 0.0f && fine_lag_err > 0.0f)
                      ? land_budget / (land_sigma * r->fine_k * fine_lag_err) : fmin_land;
 
@@ -776,8 +786,8 @@ static void fit_profile(void) {
                 // up part way down its ramp - it was already running during the bulk, and the
                 // prediction already counts what is in the air - so the taper floor bought no safety
                 // and cost seconds. predict_throw handles a handoff inside the taper.
-                float handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
-                                      coarse_margin_mult * 3.0f * coarse_land_flow * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
+                float handoff = fmaxf(stop_min_gr,
+                                      coarse_margin_mult * 3.0f * coarse_land_flow * coarse_lag_err + stop_margin_gr);
                 if (handoff >= 0.5f * target) continue;  // bulk has to carry at least half the charge
 
                 float cs, fs;
@@ -824,8 +834,8 @@ static void fit_profile(void) {
         best_f = fmaxf(fmin_lo, f_hi / (float) LEARN_SEARCH_STEPS);
         best_taper = fmaxf(LEARN_FINE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->fine_lag_s * r->fine_k * best_f);
         best_ctaper = fmaxf(LEARN_COARSE_TAPER_MIN_GR, LEARN_FINE_TAPER_TAIL_MULT * r->coarse_lag_s * r->coarse_k * best_c);
-        best_handoff = fmaxf(LEARN_COARSE_STOP_MIN_GR,
-                             coarse_margin_mult * 3.0f * r->coarse_k * best_cland * coarse_lag_err + LEARN_COARSE_STOP_MARGIN_GR);
+        best_handoff = fmaxf(stop_min_gr,
+                             coarse_margin_mult * 3.0f * r->coarse_k * best_cland * coarse_lag_err + stop_margin_gr);
         predict_throw(target, r->coarse_k * best_c, r->coarse_k * best_cland, best_ctaper,
                       r->fine_k * best_f, r->fine_k * best_fmin,
                       best_f, best_fmin, r->dead_time_s, best_handoff, best_taper, &best_cs, &best_fs);
@@ -1212,10 +1222,19 @@ uint8_t learn_mode_menu(void) {
 // actually observes against this: the fit works from the Learn run's lag spread, which is measured
 // over a handful of throws at speeds the tube does not land at, so it comes out conservative.
 // Real throws are the better evidence.
+bool learn_mode_is_aggressive(void) {
+    return learn_mode.config.style == LEARN_STYLE_AGGRESSIVE;
+}
+
+
+// The margin in force: the Landing Sigma setting, tightened by a quarter in Aggressive. Used by the
+// fit and by the live tuner, so both agree on what "enough margin" means.
 float learn_mode_get_land_sigma(void) {
     float s = learn_mode.config.land_sigma;
     if (s < LEARN_LAND_SIGMA_MIN) s = LEARN_LAND_SIGMA_MIN;
     if (s > LEARN_LAND_SIGMA_MAX) s = LEARN_LAND_SIGMA_MAX;
+    if (learn_mode_is_aggressive()) s *= 0.75f;
+    if (s < LEARN_LAND_SIGMA_MIN) s = LEARN_LAND_SIGMA_MIN;
     return s;
 }
 
@@ -1254,6 +1273,9 @@ bool learn_mode_init(void) {
         learn_mode.config.land_sigma > LEARN_LAND_SIGMA_MAX) {
         learn_mode.config.land_sigma = default_learn_config.land_sigma;
     }
+    // Older saves have whatever was in the padding here
+    if (learn_mode.config.style > LEARN_STYLE_AGGRESSIVE) learn_mode.config.style = LEARN_STYLE_NORMAL;
+    learn_mode.config.reserved = 0;
 
     eeprom_register_handler(learn_mode_config_save);
     return true;
@@ -1275,8 +1297,9 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     // l8 (float): min success pct
     // l9 (float): coarse stop safety factor
     // l10 (float): fine landing sigma
+    // l11 (int): style, 0 Normal 1 Aggressive
     // ee (bool): save to eeprom
-    static char json_buffer[256];
+    static char json_buffer[320];
     bool save_to_eeprom = false;
 
     for (int idx = 0; idx < num_params; idx += 1) {
@@ -1291,6 +1314,7 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
         else if (strcmp(params[idx], "l8") == 0) learn_mode.config.min_success_pct = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l9") == 0) learn_mode.config.coarse_stop_safety = strtof(values[idx], NULL);
         else if (strcmp(params[idx], "l10") == 0) learn_mode.config.land_sigma = strtof(values[idx], NULL);
+        else if (strcmp(params[idx], "l11") == 0) learn_mode.config.style = (atoi(values[idx]) == LEARN_STYLE_AGGRESSIVE) ? LEARN_STYLE_AGGRESSIVE : LEARN_STYLE_NORMAL;
         else if (strcmp(params[idx], "ee") == 0) save_to_eeprom = string_to_boolean(values[idx]);
     }
     if (learn_mode.config.time_goal_s < 1.0f) learn_mode.config.time_goal_s = 1.0f;
@@ -1308,14 +1332,14 @@ bool http_rest_learn_config(struct fs_file *file, int num_params, char *params[]
     }
 
     snprintf(json_buffer, sizeof(json_buffer),
-             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f,\"l9\":%.2f,\"l10\":%.2f}",
+             "%s{\"l0\":%.3f,\"l1\":%.3f,\"l2\":%.2f,\"l3\":%.2f,\"l4\":%.3f,\"l5\":%d,\"l6\":%.1f,\"l7\":%.0f,\"l8\":%.0f,\"l9\":%.2f,\"l10\":%.2f,\"l11\":%d}",
              http_json_header,
              learn_mode.config.coarse_target, learn_mode.config.fine_target,
              learn_mode.config.coarse_speed_ceiling, learn_mode.config.fine_speed_ceiling,
              learn_mode.config.confirm_target, (int) learn_mode.config.confirm_throws,
              learn_mode.config.time_goal_s, learn_mode.config.cup_capacity_gr,
              learn_mode.config.min_success_pct, learn_mode.config.coarse_stop_safety,
-             learn_mode.config.land_sigma);
+             learn_mode.config.land_sigma, (int) learn_mode.config.style);
 
     size_t len = strlen(json_buffer);
     file->data = json_buffer; file->len = len; file->index = len;
