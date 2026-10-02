@@ -814,3 +814,36 @@ WiFi through Settings > Firmware in the web portal.
   7 s goal, so both are the fastest-on-grid fallback. The fine phase (4.8 s for 2.3 gr) is now the
   bottleneck: ln(fmax/fmin) x 3 x fine lag. Unverified on hardware; re-run Learn to get it.
 - Learn REST gained `ctw` (coarse taper window); the portal shows it beside Coarse Kp.
+
+## Live tuner rebuilt (post v2.3): `src/learn_tuner.c`, tested on a simulated tube
+
+- **Why.** On the simulated tube (calibrated to NewProfile7: ~9 s, error SD ~0.03) the old streak
+  tuner made an already-good profile ~15% *slower* (10.2 s against 8.9 s static), matching the real
+  ~9.9 s. Its knobs were the wrong ones: with the handoff already inside the fine taper, fine max
+  never gets reached and narrowing the handoff only puts more of the charge through the slow crawl.
+- **What it is now.** Pure C, no RTOS (`learn_tuner.c/h`); `charge_mode.cpp` `learn_post_throw()` is
+  only an adapter. Three layers: (1) safety - aim trim + the landing-speed law holding the Landing
+  Sigma margin, from a winsorized (2 brackets) window of 20 throws; (2) an empirical search that
+  probes handoff / fine Kp / bulk speed / bulk taper one at a time, 10 throws an arm, keeps a step
+  only if throw time improved past noise and the landing spread did not widen; (3) a drift monitor
+  that reopens the search when throws slow or misses cluster. A single over no longer backs
+  anything off - 3 misses in 10 does.
+- **Guards.** Risky probes only run on *spare* margin (>= 1.25 x Landing Sigma). Skips the search if
+  the profile already meets Time Goal. If the final profile is not clearly faster than the one it
+  started from, the original is restored. Every write goes through `clamp_params()`.
+- **Portal:** `s15` is the tuner status, shown as "tuner: ..." under the profile line.
+- **Tests:** `python tests/tuner_regressions.py` (needs a host C compiler; `CC="python -m ziglang cc"`
+  works, `pip install ziglang`). `python tests/tuner_eval.py` prints the static / old / new table.
+  `tests/tuner_sim.c` mirrors the charge loop around a simulated tube and includes a port of the old
+  tuner (`--tuner 3`).
+- **Sim results (8 seeds x 300 throws):** conservative fit 14.2 -> 12.5 s, very conservative
+  18.1 -> 14.7 s (old tuner 14.2 / 18.1), misses 1-2%. After a mid-run powder change static misses
+  16 per 100, tuned 4.5. **On an already-good profile the new tuner is ~6% slower than static with
+  ~2 points more misses** (the margin-holding law costs time, the search costs misses) - it beats the
+  old tuner there but does not beat leaving it alone. Said plainly because the sim cannot tell us
+  whether a real profile has more headroom than the simulated one.
+- **Unverified:** nothing here has run on the device; the ARM build was not run (no toolchain on the
+  dev PC). The plant is a model. The probe accept rule (`probe_verdict()`) is the policy knob.
+- Gotcha: the dev harness mangles a backslash-zero in Python heredocs into a NUL byte (it broke
+  a C string terminator in a C string once); and a Python text-mode rewrite of a repo file turns LF into CRLF. Edit
+  with the Edit tool or write bytes explicitly.

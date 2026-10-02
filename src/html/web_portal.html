@@ -81,6 +81,9 @@
                         <span id="targetTag" class="opacity-70 bracket-tag">target ---</span>
                         <span id="lagTag" class="opacity-50 bracket-tag text-xs">lag ---</span>
                     </div>
+                    <div class="flex justify-end text-xs">
+                        <span id="tunerTag" class="opacity-50 bracket-tag"></span>
+                    </div>
                 </div>
             </div>
 
@@ -1470,6 +1473,12 @@
                 lagTag.innerText = meas > 0
                     ? `lag c${coarseUsed}s/f${fineUsed}s (last ${meas.toFixed(2)})`
                     : `lag c${coarseUsed}s/f${fineUsed}s`;
+            }
+
+            // What the live tuner is up to, empty when Learn is off
+            const tunerTag = document.getElementById("tunerTag");
+            if (tunerTag) {
+                tunerTag.innerText = data["s15"] ? ("tuner: " + String(data["s15"])) : "";
             }
 
             const targetTag = document.getElementById("targetTag");

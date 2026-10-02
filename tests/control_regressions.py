@@ -2,11 +2,15 @@
 Run: python3 tests/control_regressions.py (requires a host C compiler).
 """
 from pathlib import Path
+import os
 import re
+import shlex
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+# CC overrides the host compiler, e.g.  CC="python -m ziglang cc" python tests/control_regressions.py
+COMPILER = shlex.split(os.environ.get("CC", "cc"))
 
 
 def function(path, name):
@@ -28,7 +32,7 @@ def run(name, source, defines=(), arguments=()):
         path = Path(folder) / "test.c"
         path.write_text(source)
         binary = Path(folder) / "test"
-        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
+        subprocess.run([*COMPILER, "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
                         "-fno-sanitize-recover=all", *defines, str(path), "-lm", "-o", str(binary)], check=True)
         subprocess.run([str(binary), *arguments], check=True)
     print(name + ": passed")

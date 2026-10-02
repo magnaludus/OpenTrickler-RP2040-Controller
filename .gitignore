@@ -85,3 +85,6 @@ build*/
 .toolchain/
 build_pico_w
 build_pico2_w
+
+# Host-side tuner simulation build output
+build_host/

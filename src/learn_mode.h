@@ -134,6 +134,7 @@ bool learn_mode_config_save(void);
 uint8_t learn_mode_menu(void);              // runs the whole routine, returns the form id to go back to
 bool learn_mode_apply_to_profile(void);     // write the fitted values into the selected profile (RAM)
 float learn_mode_get_land_sigma(void);      // margin the landing speed is held to, for live tuning
+float learn_mode_get_time_goal(void);       // throws at or under this need no live search
 
 // REST
 bool http_rest_learn_state(struct fs_file *file, int num_params, char *params[], char *values[]);

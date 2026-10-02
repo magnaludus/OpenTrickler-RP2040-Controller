@@ -1220,6 +1220,14 @@ float learn_mode_get_land_sigma(void) {
 }
 
 
+// Throws already at or under this need no live search, so the tuner only watches. Zero turns the
+// shortcut off and it always searches.
+float learn_mode_get_time_goal(void) {
+    float g = learn_mode.config.time_goal_s;
+    return (g > 0.0f && g < 120.0f) ? g : 0.0f;
+}
+
+
 bool learn_mode_config_save(void) {
     return save_config(EEPROM_LEARN_CONFIG_BASE_ADDR, &learn_mode.config, sizeof(learn_mode.config));
 }

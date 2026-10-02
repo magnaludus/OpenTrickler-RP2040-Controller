@@ -109,6 +109,7 @@ float charge_mode_get_last_elapsed_seconds(void);
 float charge_mode_get_measured_lag(void);       // lag from the last throw, 0 if not measurable
 void charge_mode_learn_set_suppressed(bool suppressed);  // pause per-throw tuning (Learn's confirm set)
 float charge_mode_get_dead_time(void);          // motor start to first movement on the scale, last throw
+const char * charge_mode_learn_status(void);    // what the live tuner is doing, empty when Learn is off
 
 // REST interface
 bool http_rest_charge_mode_config(struct fs_file *file, int num_params, char *params[], char *values[]);
