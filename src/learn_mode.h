@@ -83,10 +83,10 @@ typedef struct {
 #define EEPROM_LEARN_CONFIG_REV     4
 #define LEARN_MAX_CONFIRM_ROUNDS    3
 
-// How hard Learn pushes. Normal is the tested behaviour. Aggressive trades margin for speed: a tighter
-// bulk handoff, a faster fine landing, and a live tuner that probes further and tolerates more
-// misses. It scales the two margin dials below rather than replacing them, so they still mean
-// something in either style.
+// How hard Learn pushes. Normal is the tested behaviour. Aggressive trades margin for speed: a lower
+// floor on the bulk handoff, and a live tuner that probes further and tolerates more misses. The
+// margin settings (Time Goal, Bulk Safety Factor, Landing Sigma, Target Success) are separate fields;
+// the portal fills them in with a preset when the style is chosen, and they stay editable.
 #define LEARN_STYLE_NORMAL          0
 #define LEARN_STYLE_AGGRESSIVE      1
 

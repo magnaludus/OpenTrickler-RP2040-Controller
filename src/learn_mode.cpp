@@ -63,15 +63,15 @@ static const learn_config_t default_learn_config = {
     .style = LEARN_STYLE_NORMAL,
     .reserved = 0,
     .coarse_target = 8.0f,
-    .fine_target = 1.75f,
-    .coarse_speed_ceiling = 6.0f,
-    .fine_speed_ceiling = 4.0f,
-    .confirm_target = 42.5f,
-    .confirm_throws = LEARN_CONFIRM_THROWS,
+    .fine_target = 1.5f,
+    .coarse_speed_ceiling = 10.0f,
+    .fine_speed_ceiling = 6.0f,
+    .confirm_target = 26.5f,
+    .confirm_throws = 10,
     // The fit spends every second under this goal buying a tighter handoff, so the goal is the dial
     // between a fast throw and a bulk that gets closer before handing over.
-    .time_goal_s = 7.0f,
-    .cup_capacity_gr = 250.0f,
+    .time_goal_s = 8.5f,
+    .cup_capacity_gr = 350.0f,
     .min_success_pct = 95.0f,
     .coarse_stop_safety = 1.5f,
     .land_sigma = 2.0f,
@@ -652,10 +652,10 @@ static void fit_profile(void) {
     // measurements. With prediction off it already has to swallow the whole tail at 3x, so stacking
     // the factor there would just make an uncompensated profile needlessly slow.
     float coarse_margin_mult = r->predict_used ? learn_mode.config.coarse_stop_safety : 1.0f;
-    // Aggressive hands the bulk more of the charge: two thirds of the cushion, a thinner fixed
-    // allowance on top of it and a lower floor on the handoff. Normal is unchanged.
+    // Aggressive also thins the fixed allowance on top of the cushion and lowers the floor on the
+    // handoff. The cushion and Landing Sigma themselves are plain settings: choosing a style fills
+    // them in on the portal, so what runs is what the fields say.
     const bool aggressive = learn_mode_is_aggressive();
-    if (aggressive) coarse_margin_mult *= 0.67f;
     if (coarse_margin_mult < LEARN_COARSE_STOP_SAFETY_MIN) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MIN;
     if (coarse_margin_mult > LEARN_COARSE_STOP_SAFETY_MAX) coarse_margin_mult = LEARN_COARSE_STOP_SAFETY_MAX;
     const float stop_margin_gr = aggressive ? 0.05f : LEARN_COARSE_STOP_MARGIN_GR;
@@ -1227,14 +1227,12 @@ bool learn_mode_is_aggressive(void) {
 }
 
 
-// The margin in force: the Landing Sigma setting, tightened by a quarter in Aggressive. Used by the
-// fit and by the live tuner, so both agree on what "enough margin" means.
+// The margin in force: the Landing Sigma setting. Used by the fit and by the live tuner, so both
+// agree on what "enough margin" means.
 float learn_mode_get_land_sigma(void) {
     float s = learn_mode.config.land_sigma;
     if (s < LEARN_LAND_SIGMA_MIN) s = LEARN_LAND_SIGMA_MIN;
     if (s > LEARN_LAND_SIGMA_MAX) s = LEARN_LAND_SIGMA_MAX;
-    if (learn_mode_is_aggressive()) s *= 0.75f;
-    if (s < LEARN_LAND_SIGMA_MIN) s = LEARN_LAND_SIGMA_MIN;
     return s;
 }
 

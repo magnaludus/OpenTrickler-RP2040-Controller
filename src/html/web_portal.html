@@ -172,11 +172,11 @@
 
                             <div class="grid grid-cols-1 gap-1">
                                 <span class="label-text">Learn Style</span>
-                                <select class="select select-bordered" name="l11">
+                                <select class="select select-bordered" name="l11" onchange="onLearnStyleChanged(this.value)">
                                     <option value="0">Normal - tested, keeps its margin</option>
                                     <option value="1">Aggressive - faster, pushes the limit</option>
                                 </select>
-                                <span class="label-text-alt opacity-70">Aggressive hands the bulk tube more of the charge (tighter handoff, down to 0.15 gr), lands the fine tube faster (Landing Sigma x 0.75), and lets the live tuner probe further and tolerate more misses. On the simulated tube that is roughly 3-8% faster throws for about 2-3 points more throws outside the bracket. Expect more overs, and watch the first throws after switching. Re-run Learn Powder after changing it - the style shapes the fit.</span>
+                                <span class="label-text-alt opacity-70">Choosing a style fills in Time Goal, Target Success, Bulk Safety Factor and Landing Sigma with that style's starting values (Normal: 8.5 s, 95%, 1.5, 2.0 - Aggressive: 7.0 s, 90%, 1.0, 1.5). Edit them if you like, then tap Apply. Aggressive also lets the bulk hand off as close as 0.15 gr and lets the live tuner probe further and tolerate more misses. On the simulated tube that is roughly 3-8% faster throws for about 2-3 points more throws outside the bracket, so expect more overs and watch the first throws. Re-run Learn Powder after changing the style - it shapes the fit.</span>
                             </div>
 
                             <div class="grid grid-cols-2 gap-2">
@@ -1764,6 +1764,23 @@
         a.href = url; a.download = "opentrickler_learn_throws.csv";
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    }
+
+    // Starting values each Learn style brings. Filled into the form when the style is chosen, so what
+    // Apply sends is exactly what is on screen, and every one stays editable.
+    const LEARN_STYLE_PRESETS = {
+        "0": { l6: 8.5, l8: 95, l9: 1.5, l10: 2.0 },    // Normal
+        "1": { l6: 7.0, l8: 90, l9: 1.0, l10: 1.5 },    // Aggressive
+    };
+
+    function onLearnStyleChanged(style) {
+        const preset = LEARN_STYLE_PRESETS[String(style)];
+        const form = document.getElementById("learnConfigForm");
+        if (!preset || !form) { return; }
+        for (const key in preset) {
+            const element = form.querySelector('[name="' + key + '"]');
+            if (element) { element.value = String(preset[key]); }
+        }
     }
 
     function loadLearnPage(attempt = 0) {
