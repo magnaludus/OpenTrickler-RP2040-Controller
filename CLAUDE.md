@@ -11,6 +11,45 @@ firmware for a powder-trickler/scale build on a **Raspberry Pi Pico 2 W**.
 - `session-stats-bracket-learn` — kept in sync with `main`; new work can land on
   either, just keep them merged.
 
+## START HERE - current state (2026-10-02, v2.3 released)
+
+Read this section and skip the history below unless a specific question sends you there.
+The sections after "What's on this fork" are a chronological lab notebook; everything they
+decided is already in the code.
+
+**Where things stand**
+- `main` == `session-stats-bracket-learn` at the v2.3 release commit. Releases are on GitHub
+  with both .uf2 files; build and publish go through `.github/workflows/release.yml`
+  (workflow_dispatch, version `vX.Y`, notes in `.github/release_notes/vX.Y.md`).
+- v2.3 = Codex's v2.22 (PIO state-machine init restored - v2.2/v2.21 never stepped the motors,
+  see below; queue item size; 2 s scale timeout; OTA for 2 MB Pico W flash; portal UF2 checks)
+  + handoff capped at 0.5 x target + learned landing trim + **coarse taper** (new, unmeasured).
+- User's hardware: Pico 2 W, one powder, 26.5 gr charges, bracket 0.06. Last measured session
+  (v2.3-test2, before the taper): 16/16 pass, mean error -0.0007 gr, sd 0.028, but 11.5 s a
+  throw (coarse 1.85 s, fine 9.5 s). The handoff was pinned at the 13.25 gr cap because the fit
+  sized it on stop scatter at full bulk speed. The taper fixes that in a fresh Learn fit only.
+
+**Next signal to act on**
+1. User re-runs Learn Powder on v2.3, then throws a session. Wanted: the session CSV and the
+   `/rest/learn_state` JSON (one line; `ck` coarse gr/s per rps, `clag`/`flag` lag, `lagsd`,
+   `cmax`/`cmin` (cmin = coarse landing speed), `ckp`, `ctw` coarse taper window, `cst` handoff,
+   `pc`/`pf`/`pt` predicted times, `cts` stop scatter sd at the landing speed).
+2. Check: `coarse_s` non-zero every throw; total time vs the ~8 s model; no overs. If overs with
+   the bulk running long, the fit's `coarse_stop_safety` (default 1.5) or the landing speed is
+   the dial. Model says the fine phase (ln(fmax/fmin) x 3 x fine lag) is now the bottleneck.
+3. Open: Pico W `PIO ERR` report from user PM4000 - v2.22's init fix may be the answer, no
+   confirmation yet. Ladder mode and an open-loop endgame were proposed, never started.
+
+**How to work here**
+- Build: `cmake -B build -DPICO_BOARD=pico2_w && cmake --build build` (and `build_w` with
+  `pico_w`). Host tests: `python3 tests/control_regressions.py` (needs `build_pico_w` and
+  `build_pico2_w` dirs or symlinks for the UF2 test).
+- Safety first: this meters gunpowder. Never widen a bracket or loosen a stop to gain speed;
+  evidence before changes; say what is modelled vs measured.
+- The user does not code and reads terse, evidence-based summaries. Replies they will post to
+  others should sound like them: lowercase, short.
+- Push to `session-stats-bracket-learn` and fast-forward `main`; keep them equal.
+
 ## What's on this fork (session-v1.14 baseline)
 
 Ported from an earlier chat-based dev loop (patch-and-flash against a full
@@ -694,12 +733,7 @@ reports. `learn_mode_menu()` has a single return, so the flag cannot leak.
 
 ## Where we left off
 
-Two real, data-backed threads open, both flagged not implemented pending a
-decision (see above): splitting lag compensation by phase, and whether to
-extend Learn's own confirm phase past 5 throws so it can show the converged
-steady state instead of the cold-start number. Everything else is
-confirmed working as designed. Next signal: another Learn run, a new
-profile's early convergence, or a session CSV.
+Superseded - see START HERE at the top.
 
 ## Version screen quirk
 
@@ -717,23 +751,11 @@ low priority since `Build:` already answers "what firmware is this."
 
 ## Known open items
 
-- **Confirm phase can't show the live-tuned steady state.** `learn_post_throw()`
-  (`src/charge_mode.cpp:167`) only tightens `coarse_stop_threshold` after 5
-  *consecutive* clean passes (`clean_streak >= 5`, then a 5% nudge). Learn's
-  own confirmation run defaults to `LEARN_CONFIRM_THROWS = 5`
-  (`src/learn_mode.h:14`), so it can pass all 5 and still never trigger a
-  single tightening step — a 6th throw would be needed to see it. This is
-  why a Learn confirm can show a much slower avg time (e.g. 13.4s) than what
-  the machine actually settles into over a longer real session (e.g. 7.02s
-  over 15 throws) — not a bug in the fit itself, just a short sample window.
-  If we want Learn's own numbers to reflect steady-state performance, either
-  raise `confirm_throws` well past 5, or teach `fit_profile()`/confirm to
-  account for expected live-tuning convergence. Not done — flagging only.
-- Learn-mode behavior on hardware *past* the initial fit (i.e. once tuned,
-  running further charges) is only lightly tested.
-- The WiFi OTA update's auto-reboot-after-flash path was fixed in v1.10, but
-  only the file copy step has been confirmed on hardware — the automatic
-  reboot itself hasn't been verified end to end.
+- Coarse taper (v2.3) is modelled, not measured. Needs a fresh Learn fit and a session CSV.
+- Pico W `PIO ERR` (user PM4000, v2.1): v2.22 restored the state-machine init; unconfirmed.
+- Learn's 5-throw confirm cannot show live-tuned steady state (tighten needs 5 clean + 1).
+- OTA apply path on Pico W (RP2040) has never been exercised on hardware.
+- Ladder mode / open-loop endgame: proposed, not started.
 
 ## Build
 
